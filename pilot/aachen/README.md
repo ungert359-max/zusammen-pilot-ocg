@@ -17,4 +17,8 @@ Branch strategy:
 - `main` stays close to upstream OCG.
 - `pilot-aachen-mvp` contains pilot-specific configuration.
 
+Validation:
+- `.github/workflows/pilot-validate.yml` checks the Helm chart with the Aachen overrides.
+- the same workflow builds the application and database-migrator containers to catch deployment blockers before a server is ordered.
+
 External infrastructure such as a public host, domain and transactional email will be connected only after the application configuration has passed a smoke test.
