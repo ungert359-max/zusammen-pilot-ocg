@@ -1,0 +1,55 @@
+name: Aachen pilot validation
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  helm:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Helm
+        uses: azure/setup-helm@v4
+
+      - name: Build chart dependencies
+        run: helm dependency build charts/ocg
+
+      - name: Lint pilot chart
+        run: >-
+          helm lint charts/ocg
+          -f pilot/aachen/values-pilot.yaml
+          --set-string server.badges.signingKey=ci-placeholder
+
+      - name: Render pilot manifests
+        run: >-
+          helm template zusammen-pilot charts/ocg
+          -f pilot/aachen/values-pilot.yaml
+          --set-string server.badges.signingKey=ci-placeholder
+          > /tmp/zusammen-pilot.yaml
+
+  images:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build database migrator image
+        run: docker build -f database/migrations/Dockerfile -t zusammen-pilot-dbmigrator:ci .
+
+      - name: Build application image
+        run: >-
+          docker build
+          --build-arg OCG_COMMIT_SHA=${GITHUB_SHA}
+          -f ocg-server/Dockerfile
+          -t zusammen-pilot-server:ci
+          .
