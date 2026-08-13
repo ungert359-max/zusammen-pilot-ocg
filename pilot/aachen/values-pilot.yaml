@@ -1,0 +1,26 @@
+# Non-sensitive Helm overrides for the Aachen MVP.
+# Connection details and credentials are supplied only at deploy time.
+
+images:
+  provider: db
+
+meetings:
+  zoom:
+    enabled: false
+
+payments:
+  enabled: false
+
+redirector:
+  enabled: false
+
+server:
+  login:
+    email: true
+    github: false
+    linuxfoundation: false
+  deploy:
+    replicaCount: 1
+
+postgresql:
+  enabled: true
