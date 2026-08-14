@@ -41,13 +41,15 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
             -i "$HOME/.ssh/id_ed25519" \
             deploy@178.104.6.218 \
             'set -eu
              echo "REMOTE_USER=$(id -un)"
              echo "REMOTE_HOST=$(hostname)"
              echo "REMOTE_ARCH=$(uname -m)"
-             for c in git helm k3s docker nerdctl buildctl; do
+             for c in git helm k3s docker kubectl; do
                if command -v "$c" >/dev/null 2>&1; then echo "TOOL_$c=present"; else echo "TOOL_$c=missing"; fi
              done
              if sudo -n true >/dev/null 2>&1; then
@@ -59,6 +61,10 @@ jobs:
                echo "MIGRATOR_IMAGE_CHECK_BEGIN"
                sudo -n k3s ctr images list name==zusammen-pilot-dbmigrator:local || true
                echo "MIGRATOR_IMAGE_CHECK_END"
+               echo "RUNTIME_STATE_BEGIN"
+               sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get pods,svc,pvc -o wide 2>/dev/null || true
+               sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 20 || true
+               echo "RUNTIME_STATE_END"
              else
                echo "SUDO_NONINTERACTIVE=no"
              fi'
