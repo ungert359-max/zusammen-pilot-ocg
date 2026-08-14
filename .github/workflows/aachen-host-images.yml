@@ -15,7 +15,7 @@ permissions:
 jobs:
   prepare-images:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90
     env:
       GH_TOKEN: ${{ github.token }}
       HETZNER_HOST: 178.104.6.218
