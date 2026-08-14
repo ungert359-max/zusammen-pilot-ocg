@@ -31,14 +31,44 @@ jobs:
         run: >-
           helm lint charts/ocg
           -f pilot/aachen/values-pilot.yaml
+          --set-string db.password=ci-database-password
+          --set-string postgresql.auth.password=ci-database-password
           --set-string server.badges.signingKey=ci-placeholder
 
       - name: Render pilot manifests
         run: >-
           helm template zusammen-pilot charts/ocg
           -f pilot/aachen/values-pilot.yaml
+          --set-string db.password=ci-database-password
+          --set-string postgresql.auth.password=ci-database-password
           --set-string server.badges.signingKey=ci-placeholder
           > /tmp/zusammen-pilot.yaml
+
+      - name: Enforce private pilot manifest invariants
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rendered=/tmp/zusammen-pilot.yaml
+          postgres_digest='sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6'
+
+          grep -Fq "$postgres_digest" "$rendered"
+          grep -Fq 'image: zusammen-pilot-server:local' "$rendered"
+          grep -Fq 'image: zusammen-pilot-dbmigrator:local' "$rendered"
+
+          if grep -q '^kind: Ingress$' "$rendered"; then
+            echo 'A private pilot render must not contain an Ingress.' >&2
+            exit 1
+          fi
+
+          if grep -Eq '^[[:space:]]*type:[[:space:]]*(NodePort|LoadBalancer)[[:space:]]*$' "$rendered"; then
+            echo 'A private pilot render must not expose NodePort or LoadBalancer services.' >&2
+            exit 1
+          fi
+
+          if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
+            echo 'The upstream default database password must not survive a deployment render.' >&2
+            exit 1
+          fi
 
   images:
     runs-on: ubuntu-latest
