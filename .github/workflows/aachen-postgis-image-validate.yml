@@ -91,6 +91,7 @@ jobs:
 
           docker run --rm \
             --network "$network" \
+            -e TERN_CONF=/home/ocg/.config/ocg/tern.conf \
             -v "$tern_conf:/home/ocg/.config/ocg/tern.conf:ro" \
             zusammen-pilot-dbmigrator:ci \
             ./migrate.sh
