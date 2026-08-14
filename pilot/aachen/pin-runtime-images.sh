@@ -26,7 +26,7 @@ if grep -Fq 'docker.io/artifacthub/postgres:latest' "$tmp_out"; then
   echo 'Aachen post-renderer: mutable PostgreSQL helper image survived rendering.' >&2
   exit 1
 fi
-if grep -Eq 'docker.io/bitnamilegacy/kubectl:[^[:space:]"'"']+' "$tmp_out"; then
+if grep -Eq "docker.io/bitnamilegacy/kubectl:[^[:space:]\"]+" "$tmp_out"; then
   echo 'Aachen post-renderer: mutable kubectl helper image survived rendering.' >&2
   exit 1
 fi
