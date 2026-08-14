@@ -65,6 +65,16 @@ jobs:
             exit 1
           fi
 
+          if grep -Eq '^[[:space:]]*externalIPs:[[:space:]]*' "$rendered"; then
+            echo 'A private pilot render must not configure external service IPs.' >&2
+            exit 1
+          fi
+
+          if grep -Eq '^[[:space:]]*hostNetwork:[[:space:]]*true[[:space:]]*$|^[[:space:]]*hostPort:[[:space:]]*[0-9]+' "$rendered"; then
+            echo 'A private pilot render must not expose pods through host networking or hostPort.' >&2
+            exit 1
+          fi
+
           if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
             echo 'The upstream default database password must not survive a deployment render.' >&2
             exit 1
