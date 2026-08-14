@@ -61,6 +61,9 @@ jobs:
                echo "MIGRATOR_IMAGE_CHECK_BEGIN"
                sudo -n k3s ctr images list name==zusammen-pilot-dbmigrator:local || true
                echo "MIGRATOR_IMAGE_CHECK_END"
+               echo "DEPENDENCY_IMAGE_DIGESTS_BEGIN"
+               sudo -n k3s ctr images list | grep -E "artifacthub/postgres|bitnamilegacy/kubectl" || true
+               echo "DEPENDENCY_IMAGE_DIGESTS_END"
                echo "RUNTIME_STATE_BEGIN"
                sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get pods,svc,pvc -o wide 2>/dev/null || true
                sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 20 || true
