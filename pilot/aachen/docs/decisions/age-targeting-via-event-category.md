@@ -53,6 +53,14 @@ Falls die kompakte `EventSummary` den Namen der Event Category dafür noch nicht
 
 Diese Mini-Erweiterung darf **keine Schemaänderung und keine neue Datenbankmigration** auslösen; sie soll lediglich einen ohnehin bereits gespeicherten Wert zusätzlich ausgeben.
 
+## Verbindliches DB-Kosten- und Karten-Isolations-Gate
+
+**Wir bauen es so, dass es erst aktiviert werden darf, nachdem bewiesen wurde, dass die konkrete Abfrage billig ist, und dass es im Fehlerfall automatisch vom eigentlichen OCG-Kartenbetrieb isoliert werden kann.**
+
+Das gilt auch für die oben genannte optionale Ausgabe von `event_category_name`: Falls dafür gegenüber dem bestehenden OCG-Map-/Explore-Pfad zusätzliche Datenbankarbeit oder ein materiell geänderter Query-Plan erforderlich wird, bleibt diese Anzeige zunächst OFF. Vor Aktivierung müssen die konkrete Abfrage bzw. der konkrete Query-Plan mit realistischen Pilotdaten gemessen, erforderliche Indizes verifiziert und die Auswirkungen auf den normalen Kartenpfad geprüft werden.
+
+Die Zusatzanzeige muss so angebunden sein, dass sie bei Fehler, Timeout, Überlastung oder Deaktivierung entfallen kann, ohne die normale OCG-Karte zu blockieren. N+1-Abfragen pro Event sind nicht zulässig. Maßgeblich ist die vollständige Entscheidung in `map-query-cost-and-isolation-gate.md`.
+
 ## Sicherheits-/Änderungsprinzip
 
 Oberste Priorität bleibt die fehlerarme, additive Erweiterung des bestehenden OCG-Piloten:
@@ -61,10 +69,11 @@ Oberste Priorität bleibt die fehlerarme, additive Erweiterung des bestehenden O
 - keine Nutzer-Altersdaten einführen, solange sie nicht zwingend erforderlich sind;
 - keine Datenbankschemaänderung für den Altersgruppenmechanismus;
 - vorhandene Filter-, Validierungs- und Suchpfade möglichst unverändert weiterverwenden;
-- Änderungen an Darstellung/Benennung strikt von der bestehenden Kernlogik trennen.
+- Änderungen an Darstellung/Benennung strikt von der bestehenden Kernlogik trennen;
+- jede zusätzliche Map-/Explore-Datenbankarbeit vor Aktivierung messen und vom OCG-Basispfad isolierbar halten.
 
 ## Nicht Bestandteil dieser Entscheidung
 
 Diese Entscheidung führt **kein automatisches Matching nach dem tatsächlichen Alter eines Nutzers** ein. Der Filter bezieht sich ausschließlich auf die vom Event festgelegte Ziel-Altersgruppe.
 
-Wenn später ein echtes Nutzeralter-Matching erforderlich wird, ist dafür eine separate Architektur- und Datenschutzentscheidung nötig.
+Wenn später ein echtes Nutzeralter-Matching erforderlich wird, ist dafür eine separate Architektur- und Datenschutzentscheidung nötig. Auch eine solche spätere Map-/Explore-Abfrage unterliegt erneut dem verbindlichen DB-Kosten- und Isolations-Gate.
