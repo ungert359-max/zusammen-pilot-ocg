@@ -39,10 +39,42 @@ server:
 
 postgresql:
   enabled: true
-  # Keep the exact reviewed upstream database base recorded here. The Aachen
-  # post-renderer maps this rendered reference to the locally built
-  # zusammen-pilot-postgres:local image, whose Dockerfile inherits this digest
-  # and adds only the PostGIS package required by the unchanged OCG migration.
+  # Keep the inherited chart's reviewed database image reference as a render-time
+  # sentinel only. The Aachen post-renderer replaces it with the locally built,
+  # registry-closed PostgreSQL 17 + PostGIS image before anything reaches k3s.
+  # The actual runtime base digest is pinned in postgres-postgis/Dockerfile.
   image:
     digest: sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6
     pullPolicy: Never
+  # Keep the dependency database identity identical to OCG's db.* contract.
+  auth:
+    username: ocg
+    database: ocg
+    enablePostgresUser: false
+  # The Docker Official PostgreSQL image uses PGDATA below the mounted parent.
+  # Mounting the parent lets the non-root postgres user create/own PGDATA while
+  # Kubernetes fsGroup grants access to the persistent volume root.
+  postgresqlDataDir: /var/lib/postgresql/data
+  primary:
+    persistence:
+      mountPath: /var/lib/postgresql
+    podSecurityContext:
+      enabled: true
+      fsGroup: 999
+      fsGroupChangePolicy: OnRootMismatch
+    containerSecurityContext:
+      enabled: true
+      runAsUser: 999
+      runAsGroup: 999
+      runAsNonRoot: true
+      privileged: false
+      allowPrivilegeEscalation: false
+      readOnlyRootFilesystem: false
+      capabilities:
+        drop:
+          - ALL
+      seccompProfile:
+        type: RuntimeDefault
+    extraEnvVars:
+      - name: POSTGRES_DB
+        value: ocg

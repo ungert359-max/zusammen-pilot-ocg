@@ -23,12 +23,16 @@ jobs:
           bash -n pilot/aachen/private-smoke-test.sh
           bash -n pilot/aachen/pin-runtime-images.sh
 
-      - name: Verify pilot database base is immutable
+      - name: Verify pilot database runtime base is immutable PostgreSQL 17
         shell: bash
         run: |
           set -Eeuo pipefail
-          postgres_digest='sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6'
-          grep -Fq "FROM docker.io/artifacthub/postgres@$postgres_digest" pilot/aachen/postgres-postgis/Dockerfile
+          postgres_digest='sha256:6b638839aa8ffdc0f1e186be8a04d544368b05110a314c40d3225a15e9c9c98d'
+          grep -Fq "FROM docker.io/library/postgres@$postgres_digest" pilot/aachen/postgres-postgis/Dockerfile
+          grep -Fq 'postgresql-17-postgis-3' pilot/aachen/postgres-postgis/Dockerfile
+          grep -Fq 'postgresqlDataDir: /var/lib/postgresql/data' pilot/aachen/values-pilot.yaml
+          grep -Fq 'mountPath: /var/lib/postgresql' pilot/aachen/values-pilot.yaml
+          grep -Fq 'runAsUser: 999' pilot/aachen/values-pilot.yaml
 
       - name: Set up Helm 3 used by the pilot runtime
         uses: azure/setup-helm@v4
@@ -101,16 +105,25 @@ jobs:
             fi
           }
 
-          require_rendered "$postgres_runtime" 'local PostGIS PostgreSQL image'
+          require_rendered "$postgres_runtime" 'local PostgreSQL 17 + PostGIS image'
           require_rendered 'imagePullPolicy: Never' 'fail-closed PostgreSQL image pull policy'
           require_rendered "$kubectl_digest" 'pinned kubectl helper digest'
           require_rendered 'image: zusammen-pilot-server:local' 'local OCG server image'
           require_rendered 'image: zusammen-pilot-dbmigrator:local' 'local database migrator image'
+          require_rendered 'name: POSTGRES_DB' 'official PostgreSQL database-name environment variable'
+          require_rendered 'value: ocg' 'OCG database identity'
+          require_rendered 'runAsUser: 999' 'non-root PostgreSQL runtime user'
+          require_rendered 'runAsNonRoot: true' 'non-root PostgreSQL runtime policy'
           require_bootstrap 'name: dbmigrator-config' 'database migrator bootstrap Secret'
           require_bootstrap '"helm.sh/hook": pre-upgrade' 'expected inherited pre-upgrade hook annotation'
 
           if grep -Fq 'docker.io/artifacthub/postgres' "$rendered"; then
-            echo 'A private pilot render must not reference an external Artifact Hub PostgreSQL image.' >&2
+            echo 'A private pilot render must not reference the chart sentinel PostgreSQL image.' >&2
+            dump_image_lines
+            exit 1
+          fi
+          if grep -Eq 'docker.io/(library/)?postgres(:|@)' "$rendered"; then
+            echo 'A private pilot render must not reference an external Docker PostgreSQL image.' >&2
             dump_image_lines
             exit 1
           fi

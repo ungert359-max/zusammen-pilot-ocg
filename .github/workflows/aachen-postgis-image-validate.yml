@@ -20,37 +20,48 @@ permissions:
 jobs:
   postgis:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Build pilot-only PostgreSQL image
+      - name: Build pilot-only PostgreSQL 17 image
         run: >-
           docker build
           -f pilot/aachen/postgres-postgis/Dockerfile
           -t zusammen-pilot-postgres:ci
           .
 
-      - name: Prove PostGIS extension can be created
+      - name: Build unchanged OCG database migrator
+        run: docker build -f database/migrations/Dockerfile -t zusammen-pilot-dbmigrator:ci .
+
+      - name: Prove PostgreSQL version, PostGIS and unchanged OCG migrations
         shell: bash
         run: |
           set -Eeuo pipefail
           container=zusammen-pilot-postgis-ci
+          network=zusammen-pilot-postgis-ci
+          tern_conf="$(mktemp)"
           cleanup() {
             docker logs "$container" >/tmp/aachen-postgis.log 2>&1 || true
             docker rm -f "$container" >/dev/null 2>&1 || true
+            docker network rm "$network" >/dev/null 2>&1 || true
+            rm -f "$tern_conf"
           }
           trap cleanup EXIT INT TERM
 
+          docker network create "$network" >/dev/null
           docker run -d \
             --name "$container" \
+            --network "$network" \
+            -e POSTGRES_USER=ocg \
             -e POSTGRES_PASSWORD=ci-only-not-a-secret \
+            -e POSTGRES_DB=ocg \
             zusammen-pilot-postgres:ci >/dev/null
 
           ready=false
-          for _ in $(seq 1 30); do
-            if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then
+          for _ in $(seq 1 45); do
+            if docker exec "$container" pg_isready -U ocg -d ocg >/dev/null 2>&1; then
               ready=true
               break
             fi
@@ -61,7 +72,30 @@ jobs:
             exit 1
           }
 
+          version_num="$(docker exec "$container" psql -At -U ocg -d ocg -c 'SHOW server_version_num;')"
+          [[ "$version_num" =~ ^17[0-9]{4}$ ]] || {
+            echo "Expected PostgreSQL 17, found server_version_num=$version_num" >&2
+            exit 1
+          }
+
+          cat > "$tern_conf" <<'EOF'
+          [database]
+          host = zusammen-pilot-postgis-ci
+          port = 5432
+          database = ocg
+          user = ocg
+          password = ci-only-not-a-secret
+          sslmode = disable
+          EOF
+          chmod 600 "$tern_conf"
+
+          docker run --rm \
+            --network "$network" \
+            -v "$tern_conf:/home/ocg/.config/ocg/tern.conf:ro" \
+            zusammen-pilot-dbmigrator:ci \
+            ./migrate.sh
+
           docker exec "$container" \
-            psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
-            -c 'CREATE EXTENSION postgis;' \
-            -c 'SELECT PostGIS_Full_Version();'
+            psql -v ON_ERROR_STOP=1 -U ocg -d ocg \
+            -c 'SELECT PostGIS_Full_Version();' \
+            -c "SELECT to_regclass('public.user_badge') AS user_badge_table;"
