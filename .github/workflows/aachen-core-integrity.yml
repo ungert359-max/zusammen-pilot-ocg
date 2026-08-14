@@ -1,0 +1,29 @@
+name: Aachen upstream core integrity
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  preserve-upstream-core:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Fetch fork main reference
+        shell: bash
+        run: git fetch --no-tags origin main:refs/remotes/origin/main
+
+      - name: Validate guard script syntax
+        shell: bash
+        run: bash -n pilot/aachen/verify-upstream-core-untouched.sh
+
+      - name: Reject local edits to upstream OCG core
+        shell: bash
+        run: bash pilot/aachen/verify-upstream-core-untouched.sh origin/main HEAD
