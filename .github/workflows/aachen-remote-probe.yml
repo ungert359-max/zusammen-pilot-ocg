@@ -1,0 +1,64 @@
+name: Aachen remote host probe
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+    paths:
+      - .github/workflows/aachen-remote-probe.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Prepare pinned SSH host key and deploy key
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Read-only pilot host probe
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            deploy@178.104.6.218 \
+            'set -eu
+             echo "REMOTE_USER=$(id -un)"
+             echo "REMOTE_HOST=$(hostname)"
+             echo "REMOTE_ARCH=$(uname -m)"
+             for c in git helm k3s docker nerdctl buildctl; do
+               if command -v "$c" >/dev/null 2>&1; then echo "TOOL_$c=present"; else echo "TOOL_$c=missing"; fi
+             done
+             if sudo -n true >/dev/null 2>&1; then
+               echo "SUDO_NONINTERACTIVE=yes"
+               sudo -n k3s secrets-encrypt status || true
+               echo "SERVER_IMAGE_CHECK_BEGIN"
+               sudo -n k3s ctr images list name==zusammen-pilot-server:local || true
+               echo "SERVER_IMAGE_CHECK_END"
+               echo "MIGRATOR_IMAGE_CHECK_BEGIN"
+               sudo -n k3s ctr images list name==zusammen-pilot-dbmigrator:local || true
+               echo "MIGRATOR_IMAGE_CHECK_END"
+             else
+               echo "SUDO_NONINTERACTIVE=no"
+             fi'
