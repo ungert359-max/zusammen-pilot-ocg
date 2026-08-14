@@ -22,11 +22,11 @@ jobs:
       # pilot host. Control-only pilot files may advance independently, but
       # the remote preflight below fails closed if any application/image input
       # changed since this commit.
-      PILOT_IMAGE_SHA: afdee54d711ed0f06f14d94a5f366d106432babe
+      PILOT_IMAGE_SHA: 2198e5e151ada2d5e863dc3b38e088ce87124b2a
       PILOT_CONTROL_SHA: ${{ github.sha }}
-      POSTGRES_IMAGE_DIGEST: sha256:9a285cb35004b4dd667fa352df0564d3f0321b084f71b153e68e2a852ba665d3
-      SERVER_IMAGE_DIGEST: sha256:4921607c062803b5e803e025acabfa39a458a4eda91a3940c50d715fb8d6fbcb
-      MIGRATOR_IMAGE_DIGEST: sha256:24b202004ae019bfb420fcd74faca3fa8eaa3c2034cb3b038773322b4c995f40
+      POSTGRES_IMAGE_DIGEST: sha256:dd21a0fdefbf7e569c3b014b3fc5eb1874853b9dd95eb30536731fbcd392a198
+      SERVER_IMAGE_DIGEST: sha256:467f51ede28b930ef6ed5b5d3da5893620630c4849db863613bb23e7c9cb3a45
+      MIGRATOR_IMAGE_DIGEST: sha256:3bfaf2a49dc262712083a52928ef1ecfa6b129079cd93cd0dc9c1f00e0bda9c2
     steps:
       - name: Prepare pinned SSH connection
         shell: bash
