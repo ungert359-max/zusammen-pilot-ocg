@@ -71,6 +71,8 @@ jobs:
             -o StrictHostKeyChecking=yes \
             -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
             -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
             -i "$HOME/.ssh/id_ed25519" \
             "$HETZNER_USER@$HETZNER_HOST" \
             "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
