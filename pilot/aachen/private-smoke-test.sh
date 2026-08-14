@@ -7,12 +7,14 @@ set -Eeuo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHART_SOURCE="$REPO_ROOT/charts/ocg"
 PILOT_VALUES="$REPO_ROOT/pilot/aachen/values-pilot.yaml"
+POST_RENDERER_SOURCE="$REPO_ROOT/pilot/aachen/pin-runtime-images.sh"
 NAMESPACE="${AACHEN_NAMESPACE:-ocg-aachen-smoke}"
 RELEASE="${AACHEN_RELEASE:-aachen-smoke}"
 LOCAL_PORT="${AACHEN_LOCAL_PORT:-18080}"
 PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-}"
 TIMEOUT="${AACHEN_TIMEOUT:-10m}"
 POSTGRES_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
+KUBECTL_DIGEST="sha256:cd354d5b25562b195b277125439c23e4046902d7f1abc0dc3c75aad04d298c17"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -26,6 +28,9 @@ info() {
 for command_name in helm kubectl curl k3s grep awk sed stat mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
+
+[[ -f "$POST_RENDERER_SOURCE" ]] || fail "Aachen runtime post-renderer is missing"
+bash -n "$POST_RENDERER_SOURCE" || fail "Aachen runtime post-renderer has invalid shell syntax"
 
 # The pilot's pinned PostgreSQL digest is the verified linux/amd64 image.
 [[ "$(uname -m)" == "x86_64" ]] || fail "this smoke-test profile is pinned for linux/amd64 (x86_64)"
@@ -80,21 +85,38 @@ cp -a "$CHART_SOURCE" "$tmpdir/ocg"
 rm -rf "$tmpdir/ocg/charts"
 helm dependency build "$tmpdir/ocg" >/dev/null
 
+# The post-renderer is an additive pilot adapter. Copy it into the private temp
+# directory and make only that copy executable so the Git checkout stays clean.
+post_renderer="$tmpdir/pin-runtime-images.sh"
+cp "$POST_RENDERER_SOURCE" "$post_renderer"
+chmod 700 "$post_renderer"
+
 rendered="$tmpdir/rendered.yaml"
 umask 077
 helm template "$RELEASE" "$tmpdir/ocg" \
   --namespace "$NAMESPACE" \
   -f "$PILOT_VALUES" \
   -f "$PRIVATE_VALUES_FILE" \
+  --post-renderer "$post_renderer" \
   > "$rendered"
 chmod 600 "$rendered"
 
 # Fail closed if deployment-time values fall back to the upstream development
-# password, if PostgreSQL is not digest-pinned, or if public exposure reappears.
+# password, if runtime helper images remain mutable, if the install migration
+# Secret is still upgrade-only, or if public exposure reappears.
 if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
   fail "rendered manifests still contain the upstream default database password"
 fi
 grep -Fq "$POSTGRES_DIGEST" "$rendered" || fail "rendered PostgreSQL image is not pinned to the reviewed digest"
+grep -Fq "$KUBECTL_DIGEST" "$rendered" || fail "rendered kubectl helper image is not pinned to the reviewed digest"
+if grep -Fq 'docker.io/artifacthub/postgres:latest' "$rendered"; then
+  fail "rendered manifests still contain a mutable PostgreSQL helper image"
+fi
+if grep -Eq 'docker.io/bitnamilegacy/kubectl:[^[:space:]\"]+' "$rendered"; then
+  fail "rendered manifests still contain a mutable kubectl helper image"
+fi
+grep -Fq '"helm.sh/hook": pre-install,pre-upgrade' "$rendered" || \
+  fail "rendered dbmigrator Secret is not available as a pre-install hook"
 if grep -q '^kind: Ingress$' "$rendered"; then
   fail "rendered smoke-test manifests contain an Ingress"
 fi
@@ -114,6 +136,7 @@ helm upgrade --install "$RELEASE" "$tmpdir/ocg" \
   --create-namespace \
   -f "$PILOT_VALUES" \
   -f "$PRIVATE_VALUES_FILE" \
+  --post-renderer "$post_renderer" \
   --wait \
   --wait-for-jobs \
   --atomic \
