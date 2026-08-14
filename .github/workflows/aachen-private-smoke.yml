@@ -18,7 +18,14 @@ jobs:
     env:
       HETZNER_HOST: 178.104.6.218
       HETZNER_USER: deploy
-      PILOT_SOURCE_SHA: 95ef22c66176ed52e966be6f2a71bac055d3274e
+      # These exact application images were built and imported successfully on
+      # the pilot host. Control-only pilot files may advance independently, but
+      # the remote preflight below fails closed if any application/image input
+      # changed since this commit.
+      PILOT_IMAGE_SHA: 95ef22c66176ed52e966be6f2a71bac055d3274e
+      PILOT_CONTROL_SHA: ${{ github.sha }}
+      SERVER_IMAGE_DIGEST: sha256:8d8c96991d84b183acdce6240f995394c4fef45d27f4e8480bb5592b4cd7f586
+      MIGRATOR_IMAGE_DIGEST: sha256:2fbb69770b4be04833a9c7c14b514eb80e3d22d41f4454139e148794fdef0062
     steps:
       - name: Prepare pinned SSH connection
         shell: bash
@@ -49,13 +56,16 @@ jobs:
             -o ServerAliveCountMax=10 \
             -i "$HOME/.ssh/id_ed25519" \
             "$HETZNER_USER@$HETZNER_HOST" \
-            "sudo -n env PILOT_SOURCE_SHA='$PILOT_SOURCE_SHA' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+            "sudo -n env PILOT_IMAGE_SHA='$PILOT_IMAGE_SHA' PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' SERVER_IMAGE_DIGEST='$SERVER_IMAGE_DIGEST' MIGRATOR_IMAGE_DIGEST='$MIGRATOR_IMAGE_DIGEST' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
 
-          source_sha="${PILOT_SOURCE_SHA:?PILOT_SOURCE_SHA is required}"
+          image_sha="${PILOT_IMAGE_SHA:?PILOT_IMAGE_SHA is required}"
+          control_sha="${PILOT_CONTROL_SHA:?PILOT_CONTROL_SHA is required}"
+          server_digest="${SERVER_IMAGE_DIGEST:?SERVER_IMAGE_DIGEST is required}"
+          migrator_digest="${MIGRATOR_IMAGE_DIGEST:?MIGRATOR_IMAGE_DIGEST is required}"
           base_dir=/opt/zusammen-pilot
-          source_dir="$base_dir/runtime-source/$source_sha"
+          source_dir="$base_dir/runtime-control/$control_sha"
           private_dir="$base_dir/private"
           private_values="$private_dir/aachen-private-values.yaml"
 
@@ -73,13 +83,36 @@ jobs:
             mkdir -p "$(dirname "$source_dir")"
             git clone --quiet --no-checkout https://github.com/ungert359-max/zusammen-pilot-ocg.git "$source_dir"
           fi
-          git -C "$source_dir" fetch --quiet --depth 1 origin "$source_sha"
-          git -C "$source_dir" checkout --quiet --detach "$source_sha"
-          test "$(git -C "$source_dir" rev-parse HEAD)" = "$source_sha"
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$image_sha"
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$control_sha"
+          git -C "$source_dir" checkout --quiet --detach "$control_sha"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$control_sha"
+
+          # Reuse the already verified application images only while every change
+          # since their build is confined to pilot control/validation files.
+          unexpected_changes="$(
+            git -C "$source_dir" diff --name-only "$image_sha" "$control_sha" -- | while IFS= read -r path; do
+              case "$path" in
+                .github/workflows/aachen-private-smoke.yml|\
+                .github/workflows/aachen-remote-probe.yml|\
+                .github/workflows/pilot-validate.yml|\
+                pilot/aachen/private-smoke-test.sh|\
+                pilot/aachen/pin-runtime-images.sh) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          )"
+          if [[ -n "$unexpected_changes" ]]; then
+            echo 'Application/image inputs changed since the imported image build; refusing to reuse stale images.' >&2
+            printf '%s\n' "$unexpected_changes" >&2
+            exit 1
+          fi
 
           images_list="$(k3s ctr images list)"
-          grep -Fq 'zusammen-pilot-server:local' <<<"$images_list"
-          grep -Fq 'zusammen-pilot-dbmigrator:local' <<<"$images_list"
+          awk -v name='zusammen-pilot-server:local' -v digest="$server_digest" \
+            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+          awk -v name='zusammen-pilot-dbmigrator:local' -v digest="$migrator_digest" \
+            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
 
           install -d -m 700 "$private_dir"
           if [[ ! -f "$private_values" ]]; then
@@ -144,7 +177,6 @@ jobs:
           test "$(stat -c '%a' "$private_values")" = 600
           cd "$source_dir"
           AACHEN_PRIVATE_VALUES_FILE="$private_values" \
-          PILOT_SOURCE_SHA="$source_sha" \
           AACHEN_TIMEOUT=12m \
           bash pilot/aachen/private-smoke-test.sh
           REMOTE
