@@ -46,6 +46,7 @@ jobs:
             -i "$HOME/.ssh/id_ed25519" \
             deploy@178.104.6.218 \
             'set -eu
+             K="sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl"
              echo "REMOTE_USER=$(id -un)"
              echo "REMOTE_HOST=$(hostname)"
              echo "REMOTE_ARCH=$(uname -m)"
@@ -65,9 +66,22 @@ jobs:
                sudo -n k3s ctr images list | grep -E "artifacthub/postgres|bitnamilegacy/kubectl" || true
                echo "DEPENDENCY_IMAGE_DIGESTS_END"
                echo "RUNTIME_STATE_BEGIN"
-               sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get pods,svc,pvc -o wide 2>/dev/null || true
-               sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml kubectl -n ocg-aachen-smoke get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 20 || true
+               $K -n ocg-aachen-smoke get pods,svc,pvc -o wide 2>/dev/null || true
+               $K -n ocg-aachen-smoke get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 20 || true
                echo "RUNTIME_STATE_END"
+               echo "MIGRATION_DIAGNOSTICS_BEGIN"
+               migrator_pod="$($K -n ocg-aachen-smoke get pods -l job-name=dbmigrator-install --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 || true)"
+               if [ -n "$migrator_pod" ]; then
+                 echo "MIGRATOR_POD=$migrator_pod"
+                 $K -n ocg-aachen-smoke logs "$migrator_pod" -c check-db-ready --tail=80 2>&1 | sed -E "s/(password[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig" || true
+                 $K -n ocg-aachen-smoke logs "$migrator_pod" -c dbmigrator --tail=120 2>&1 | sed -E "s/(password[=:][[:space:]]*)[^[:space:]]+/\1[REDACTED]/Ig" || true
+               fi
+               $K -n ocg-aachen-smoke describe job dbmigrator-install 2>/dev/null | tail -n 100 || true
+               server_pod="$($K -n ocg-aachen-smoke get pods -l app.kubernetes.io/component=server --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 || true)"
+               if [ -n "$server_pod" ]; then
+                 $K -n ocg-aachen-smoke logs "$server_pod" -c check-dbmigrator-run --tail=80 2>&1 || true
+               fi
+               echo "MIGRATION_DIAGNOSTICS_END"
              else
                echo "SUDO_NONINTERACTIVE=no"
              fi'
