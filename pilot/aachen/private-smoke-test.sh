@@ -128,7 +128,10 @@ if [[ -n "$(kubectl -n "$NAMESPACE" get ingress -l "app.kubernetes.io/instance=$
   fail "an Ingress exists for the private smoke-test release"
 fi
 
-kubectl -n "$NAMESPACE" wait --for=condition=complete job/dbmigrator-install --timeout=300s
+# helm --wait --wait-for-jobs already gates normal migration Jobs. On upgrades,
+# the chart's dbmigrator is a pre-upgrade hook, and Helm blocks on Job hooks.
+# Avoid a hard-coded dbmigrator-install lookup here: repeated smoke tests use the
+# dbmigrator-upgrade hook instead, so such a lookup could inspect a stale Job.
 
 server_deployment="$(kubectl -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" \
