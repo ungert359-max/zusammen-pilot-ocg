@@ -78,7 +78,7 @@ jobs:
           source_dir=/opt/zusammen-pilot/runtime-control/e2af505629252831197b149524b9126ecfb80343
           private_values=/opt/zusammen-pilot/private/aachen-private-values.yaml
           original="$source_dir/pilot/aachen/private-smoke-test.sh"
-          diagnostic="$(mktemp /tmp/aachen-smoke-diagnostic.XXXXXX)"
+          diagnostic="$source_dir/pilot/aachen/.private-smoke-diagnostic.$$"
           cleanup() {
             helm uninstall "$release" --namespace "$namespace" >/dev/null 2>&1 || true
             rm -f "$diagnostic"
