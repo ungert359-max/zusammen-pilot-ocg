@@ -6,6 +6,10 @@ on:
       - pilot-aachen-mvp
     paths:
       - .github/workflows/aachen-host-images.yml
+      - pilot/aachen/postgres-postgis/**
+      - pilot/aachen/pin-runtime-images.sh
+      - pilot/aachen/values-pilot.yaml
+      - pilot/aachen/private-smoke-test.sh
   workflow_dispatch:
 
 permissions:
@@ -97,6 +101,10 @@ jobs:
 
           cd "$workdir/repo"
           sudo -n docker build \
+            -f pilot/aachen/postgres-postgis/Dockerfile \
+            -t zusammen-pilot-postgres:local \
+            .
+          sudo -n docker build \
             -f database/migrations/Dockerfile \
             -t zusammen-pilot-dbmigrator:local \
             .
@@ -106,15 +114,22 @@ jobs:
             -t zusammen-pilot-server:local \
             .
 
+          sudo -n docker save -o "$workdir/postgres.tar" zusammen-pilot-postgres:local
           sudo -n docker save -o "$workdir/dbmigrator.tar" zusammen-pilot-dbmigrator:local
           sudo -n docker save -o "$workdir/server.tar" zusammen-pilot-server:local
+          sudo -n k3s ctr images import "$workdir/postgres.tar"
           sudo -n k3s ctr images import "$workdir/dbmigrator.tar"
           sudo -n k3s ctr images import "$workdir/server.tar"
 
           images_list="$(sudo -n k3s ctr images list)"
+          grep -Fq 'zusammen-pilot-postgres:local' <<<"$images_list"
           grep -Fq 'zusammen-pilot-dbmigrator:local' <<<"$images_list"
           grep -Fq 'zusammen-pilot-server:local' <<<"$images_list"
-          echo "PASS: exact commit $GITHUB_SHA images are imported into k3s."
+          echo "PASS: exact commit $GITHUB_SHA pilot images are imported into k3s."
 
-          sudo -n docker image rm zusammen-pilot-dbmigrator:local zusammen-pilot-server:local >/dev/null 2>&1 || true
+          sudo -n docker image rm \
+            zusammen-pilot-postgres:local \
+            zusammen-pilot-dbmigrator:local \
+            zusammen-pilot-server:local \
+            >/dev/null 2>&1 || true
           REMOTE

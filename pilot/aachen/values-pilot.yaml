@@ -1,6 +1,6 @@
 # Non-sensitive Helm overrides for the Aachen MVP.
 # Connection details and credentials are supplied only at deploy time.
-# The first private smoke test uses the images built and imported on the pilot host.
+# The first private smoke test uses images built and imported on the pilot host.
 
 imageTag: local
 pullPolicy: IfNotPresent
@@ -39,8 +39,10 @@ server:
 
 postgresql:
   enabled: true
-  # Upstream selects artifacthub/postgres:latest. Pin the exact amd64 image used
-  # for this pilot so a registry-side "latest" change cannot alter a deployment
-  # without a reviewed repository change.
+  # Keep the exact reviewed upstream database base recorded here. The Aachen
+  # post-renderer maps this rendered reference to the locally built
+  # zusammen-pilot-postgres:local image, whose Dockerfile inherits this digest
+  # and adds only the PostGIS package required by the unchanged OCG migration.
   image:
     digest: sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6
+    pullPolicy: Never

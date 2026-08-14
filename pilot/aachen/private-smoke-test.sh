@@ -8,12 +8,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 CHART_SOURCE="$REPO_ROOT/charts/ocg"
 PILOT_VALUES="$REPO_ROOT/pilot/aachen/values-pilot.yaml"
 POST_RENDERER_SOURCE="$REPO_ROOT/pilot/aachen/pin-runtime-images.sh"
+POSTGRES_DOCKERFILE="$REPO_ROOT/pilot/aachen/postgres-postgis/Dockerfile"
 NAMESPACE="${AACHEN_NAMESPACE:-ocg-aachen-smoke}"
 RELEASE="${AACHEN_RELEASE:-aachen-smoke}"
 LOCAL_PORT="${AACHEN_LOCAL_PORT:-18080}"
 PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-}"
 TIMEOUT="${AACHEN_TIMEOUT:-10m}"
-POSTGRES_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
+POSTGRES_BASE_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
+POSTGRES_RUNTIME_IMAGE="zusammen-pilot-postgres:local"
 KUBECTL_DIGEST="sha256:cd354d5b25562b195b277125439c23e4046902d7f1abc0dc3c75aad04d298c17"
 BOOTSTRAP_SECRET_NAME="dbmigrator-config"
 
@@ -31,9 +33,13 @@ for command_name in helm kubectl curl k3s grep awk sed stat mktemp; do
 done
 
 [[ -f "$POST_RENDERER_SOURCE" ]] || fail "Aachen runtime post-renderer is missing"
+[[ -f "$POSTGRES_DOCKERFILE" ]] || fail "Aachen PostGIS Dockerfile is missing"
 bash -n "$POST_RENDERER_SOURCE" || fail "Aachen runtime post-renderer has invalid shell syntax"
+grep -Fq "FROM docker.io/artifacthub/postgres@$POSTGRES_BASE_DIGEST" "$POSTGRES_DOCKERFILE" || \
+  fail "Aachen PostGIS image does not inherit the reviewed PostgreSQL base digest"
 
-# The pilot's pinned PostgreSQL digest is the verified linux/amd64 image.
+# The pilot's database base and locally derived PostGIS image are verified only
+# for the host architecture used by this smoke profile.
 [[ "$(uname -m)" == "x86_64" ]] || fail "this smoke-test profile is pinned for linux/amd64 (x86_64)"
 
 [[ -n "$PRIVATE_VALUES_FILE" ]] || fail "set AACHEN_PRIVATE_VALUES_FILE to a private Helm values file outside this repository"
@@ -64,7 +70,7 @@ kubectl cluster-info >/dev/null
 # directly into `grep -q` can turn a successful match into a false failure if
 # grep exits early and ctr receives SIGPIPE.
 images_list="$(k3s ctr images list)"
-for image_name in zusammen-pilot-server:local zusammen-pilot-dbmigrator:local; do
+for image_name in zusammen-pilot-server:local zusammen-pilot-dbmigrator:local "$POSTGRES_RUNTIME_IMAGE"; do
   grep -Fq "$image_name" <<<"$images_list" || fail "required k3s image is missing: $image_name"
 done
 
@@ -107,15 +113,17 @@ helm template "$RELEASE" "$tmpdir/ocg" \
 chmod 600 "$rendered"
 
 # Fail closed if deployment-time values fall back to the upstream development
-# password, if install-time helper images remain mutable, or if public exposure
-# reappears.
+# password, if any database reference can pull from a registry instead of using
+# the locally verified PostGIS image, if install-time helper images remain
+# mutable, or if public exposure reappears.
 if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
   fail "rendered manifests still contain the upstream default database password"
 fi
-grep -Fq "$POSTGRES_DIGEST" "$rendered" || fail "rendered PostgreSQL image is not pinned to the reviewed digest"
+grep -Fq "$POSTGRES_RUNTIME_IMAGE" "$rendered" || fail "rendered PostgreSQL image is not the local PostGIS-enabled pilot image"
 grep -Fq "$KUBECTL_DIGEST" "$rendered" || fail "rendered kubectl helper image is not pinned to the reviewed digest"
-if grep -Fq 'docker.io/artifacthub/postgres:latest' "$rendered"; then
-  fail "rendered manifests still contain a mutable PostgreSQL helper image"
+grep -Fq 'imagePullPolicy: Never' "$rendered" || fail "rendered PostgreSQL image is not protected by a Never pull policy"
+if grep -Fq 'docker.io/artifacthub/postgres' "$rendered"; then
+  fail "rendered manifests still contain an external Artifact Hub PostgreSQL image"
 fi
 if grep -Eq 'docker.io/bitnamilegacy/kubectl:[^[:space:]\"]+' "$rendered"; then
   fail "rendered manifests still contain a mutable kubectl helper image"
