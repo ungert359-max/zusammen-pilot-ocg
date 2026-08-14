@@ -23,8 +23,10 @@ jobs:
           bash -n pilot/aachen/private-smoke-test.sh
           bash -n pilot/aachen/pin-runtime-images.sh
 
-      - name: Set up Helm
+      - name: Set up Helm 3 used by the pilot runtime
         uses: azure/setup-helm@v4
+        with:
+          version: v3.21.0
 
       - name: Build chart dependencies
         run: helm dependency build charts/ocg
@@ -52,11 +54,22 @@ jobs:
           --post-renderer /tmp/aachen-post-renderer
           > /tmp/zusammen-pilot.yaml
 
+      - name: Render install migration bootstrap secret
+        run: >-
+          helm template zusammen-pilot charts/ocg
+          -f pilot/aachen/values-pilot.yaml
+          --set-string db.password=ci-database-password
+          --set-string postgresql.auth.password=ci-database-password
+          --set-string server.badges.signingKey=ci-placeholder
+          --show-only templates/db_migrator_secret.yaml
+          > /tmp/aachen-bootstrap-secret.yaml
+
       - name: Enforce private pilot manifest invariants
         shell: bash
         run: |
           set -Eeuo pipefail
           rendered=/tmp/zusammen-pilot.yaml
+          bootstrap=/tmp/aachen-bootstrap-secret.yaml
           postgres_digest='sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6'
           kubectl_digest='sha256:cd354d5b25562b195b277125439c23e4046902d7f1abc0dc3c75aad04d298c17'
 
@@ -64,7 +77,8 @@ jobs:
           grep -Fq "$kubectl_digest" "$rendered"
           grep -Fq 'image: zusammen-pilot-server:local' "$rendered"
           grep -Fq 'image: zusammen-pilot-dbmigrator:local' "$rendered"
-          grep -Fq '"helm.sh/hook": pre-install,pre-upgrade' "$rendered"
+          grep -Fq 'name: dbmigrator-config' "$bootstrap"
+          grep -Fq '"helm.sh/hook": pre-upgrade' "$bootstrap"
 
           if grep -Fq 'docker.io/artifacthub/postgres:latest' "$rendered"; then
             echo 'A private pilot render must not contain a mutable PostgreSQL helper image.' >&2
