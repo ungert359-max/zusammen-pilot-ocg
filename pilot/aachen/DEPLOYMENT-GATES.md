@@ -18,6 +18,7 @@ This file tracks the minimum technical gates before the Aachen pilot is exposed 
 - [ ] Domain and HTTPS are connected.
 - [ ] Transactional email is connected and signup/login flows are tested.
 - [ ] Organizer-created event, RSVP, capacity, waitlist and check-in are verified end to end.
+- [ ] Every Aachen-specific Map/Explore enrichment that adds database work has passed the binding DB-cost and isolation gate in `docs/decisions/map-query-cost-and-isolation-gate.md` before its feature flag is enabled.
 
 ## Rules
 
@@ -28,6 +29,15 @@ This file tracks the minimum technical gates before the Aachen pilot is exposed 
 - Do not write OCG deployment secrets into the k3s datastore unless secrets encryption at rest is confirmed enabled.
 - Do not change the separate `app-mobile-greenfield` repository as part of this pilot.
 - Do not connect the public domain until the runtime smoke test is green.
+- Do not activate a Map/Explore enrichment merely because it builds or appears correct. Its concrete database query and its failure-isolation path must be measured and verified first.
+
+## Binding DB-cost and Map-isolation gate
+
+**Wir bauen es so, dass es erst aktiviert werden darf, nachdem bewiesen wurde, dass die konkrete Abfrage billig ist, und dass es im Fehlerfall automatisch vom eigentlichen OCG-Kartenbetrieb isoliert werden kann.**
+
+For every optional Map/Explore enrichment, activation is blocked until the concrete query has been measured on realistic pilot data, required indexes are verified, the work is bounded and non-N+1, a short scoped timeout exists, stale/request-burst work is controlled, and a feature flag or kill-switch can remove only the enrichment. Failure, timeout, overload or manual disablement of the enrichment must leave the normal OCG Explore/Map path operational.
+
+The disable/rollback path and graceful degradation must be tested before first activation. The complete binding criteria live in `docs/decisions/map-query-cost-and-isolation-gate.md`.
 
 ## Immediate next gate
 
