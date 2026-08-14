@@ -87,7 +87,7 @@ jobs:
           password = ci-only-not-a-secret
           sslmode = disable
           EOF
-          chmod 600 "$tern_conf"
+          chmod 644 "$tern_conf"
 
           docker run --rm \
             --network "$network" \
