@@ -29,7 +29,7 @@ sed \
 # container. Force every local pilot database image reference to Never so a
 # missing host import fails instead of falling back to an unintended registry.
 if ! awk -v image="$POSTGRES_RUNTIME_IMAGE" '
-  $0 ~ "^[[:space:]]*image:[[:space:]]*\\\"?" image "\\\"?[[:space:]]*$" {
+  /^[[:space:]]*image:/ && index($0, image) {
     postgres_image = 1
     print
     next
@@ -72,12 +72,12 @@ grep -Fq "$POSTGRES_RUNTIME_IMAGE" "$tmp_out" || {
 # Verify the transformed manifest itself, not just the input values. Every local
 # PostgreSQL image must be followed by a Never pull policy before another image.
 if ! awk -v image="$POSTGRES_RUNTIME_IMAGE" '
-  $0 ~ "^[[:space:]]*image:[[:space:]]*\\\"?" image "\\\"?[[:space:]]*$" {
+  /^[[:space:]]*image:/ && index($0, image) {
     postgres_image = 1
     seen += 1
     next
   }
-  postgres_image && /^[[:space:]]*imagePullPolicy:[[:space:]]*\\\"?Never\\\"?[[:space:]]*$/ {
+  postgres_image && /^[[:space:]]*imagePullPolicy:[[:space:]]*Never[[:space:]]*$/ {
     postgres_image = 0
     safe += 1
     next
