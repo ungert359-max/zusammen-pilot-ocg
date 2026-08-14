@@ -22,6 +22,17 @@ Validation:
 - the same workflow builds the application and database-migrator containers to catch deployment blockers before runtime deployment.
 - the current CI baseline has passed Helm dependency resolution, Helm lint, manifest rendering, the database-migrator image build and the application image build.
 
+## Binding safety rule for future Map/Explore enrichments
+
+**Wir bauen es so, dass es erst aktiviert werden darf, nachdem bewiesen wurde, dass die konkrete Abfrage billig ist, und dass es im Fehlerfall automatisch vom eigentlichen OCG-Kartenbetrieb isoliert werden kann.**
+
+Any Aachen-specific feature that later enriches the existing Explore/Map result with additional database-derived information is therefore OFF by default until its concrete SQL cost is measured on realistic data and its isolation path is tested. Such an enrichment must be independently disableable; timeout, overload or failure of the enrichment may remove the optional information but must not take down or block the normal OCG map.
+
+The binding criteria are defined in:
+- `docs/decisions/map-query-cost-and-isolation-gate.md`
+- `DEPLOYMENT-GATES.md`
+- `INTEGRATION-POLICY.md`
+
 ## Private runtime smoke test
 
 The next deployment step is deliberately private. Before connecting a public domain, deploy the chart on the provisioned single-node pilot host and verify that PostgreSQL becomes ready, migrations complete, OCG starts and `/health-check` responds successfully.
