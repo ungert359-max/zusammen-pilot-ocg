@@ -1,0 +1,118 @@
+name: Aachen host image preparation
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+    paths:
+      - .github/workflows/aachen-host-images.yml
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  prepare-images:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      GH_TOKEN: ${{ github.token }}
+      HETZNER_HOST: 178.104.6.218
+      HETZNER_USER: deploy
+    steps:
+      - name: Wait for Aachen validation on this exact commit
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          deadline=$((SECONDS + 2100))
+          while (( SECONDS < deadline )); do
+            run_json="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs?head_sha=${GITHUB_SHA}&event=push&per_page=20")"
+            validation="$(jq -c '[.workflow_runs[] | select(.name == "Aachen pilot validation")] | first // empty' <<<"$run_json")"
+            if [[ -z "$validation" ]]; then
+              echo 'Waiting for Aachen pilot validation run to appear...'
+              sleep 15
+              continue
+            fi
+            status="$(jq -r '.status' <<<"$validation")"
+            conclusion="$(jq -r '.conclusion // ""' <<<"$validation")"
+            echo "Aachen validation status: $status ${conclusion:+($conclusion)}"
+            if [[ "$status" == completed ]]; then
+              [[ "$conclusion" == success ]] || { echo "Aachen validation did not succeed: $conclusion" >&2; exit 1; }
+              exit 0
+            fi
+            sleep 20
+          done
+          echo 'Timed out waiting for Aachen pilot validation.' >&2
+          exit 1
+
+      - name: Prepare pinned SSH connection
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Build and import exact-commit pilot images on host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          test "$(uname -m)" = x86_64
+          sudo -n true
+          sudo -n k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
+          command -v git >/dev/null
+          command -v docker >/dev/null
+          command -v k3s >/dev/null
+
+          workdir="$(mktemp -d /tmp/aachen-images.XXXXXX)"
+          cleanup() {
+            rm -rf "$workdir"
+          }
+          trap cleanup EXIT
+
+          git clone --quiet --no-checkout https://github.com/ungert359-max/zusammen-pilot-ocg.git "$workdir/repo"
+          git -C "$workdir/repo" fetch --quiet --depth 1 origin "$GITHUB_SHA"
+          git -C "$workdir/repo" checkout --quiet --detach "$GITHUB_SHA"
+          test "$(git -C "$workdir/repo" rev-parse HEAD)" = "$GITHUB_SHA"
+
+          cd "$workdir/repo"
+          sudo -n docker build \
+            -f database/migrations/Dockerfile \
+            -t zusammen-pilot-dbmigrator:local \
+            .
+          sudo -n docker build \
+            --build-arg "OCG_COMMIT_SHA=$GITHUB_SHA" \
+            -f ocg-server/Dockerfile \
+            -t zusammen-pilot-server:local \
+            .
+
+          sudo -n docker save -o "$workdir/dbmigrator.tar" zusammen-pilot-dbmigrator:local
+          sudo -n docker save -o "$workdir/server.tar" zusammen-pilot-server:local
+          sudo -n k3s ctr images import "$workdir/dbmigrator.tar"
+          sudo -n k3s ctr images import "$workdir/server.tar"
+
+          images_list="$(sudo -n k3s ctr images list)"
+          grep -Fq 'zusammen-pilot-dbmigrator:local' <<<"$images_list"
+          grep -Fq 'zusammen-pilot-server:local' <<<"$images_list"
+          echo "PASS: exact commit $GITHUB_SHA images are imported into k3s."
+
+          sudo -n docker image rm zusammen-pilot-dbmigrator:local zusammen-pilot-server:local >/dev/null 2>&1 || true
+          REMOTE
