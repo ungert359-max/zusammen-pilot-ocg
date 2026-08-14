@@ -15,6 +15,7 @@ PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-}"
 TIMEOUT="${AACHEN_TIMEOUT:-10m}"
 POSTGRES_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
 KUBECTL_DIGEST="sha256:cd354d5b25562b195b277125439c23e4046902d7f1abc0dc3c75aad04d298c17"
+BOOTSTRAP_SECRET_NAME="dbmigrator-config"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -69,10 +70,14 @@ done
 
 tmpdir="$(mktemp -d)"
 port_forward_pid=""
+bootstrap_secret_created=false
 cleanup() {
   if [[ -n "$port_forward_pid" ]]; then
     kill "$port_forward_pid" >/dev/null 2>&1 || true
     wait "$port_forward_pid" >/dev/null 2>&1 || true
+  fi
+  if [[ "$bootstrap_secret_created" == true ]]; then
+    kubectl -n "$NAMESPACE" delete secret "$BOOTSTRAP_SECRET_NAME" --ignore-not-found >/dev/null 2>&1 || true
   fi
   rm -rf "$tmpdir"
 }
@@ -102,8 +107,8 @@ helm template "$RELEASE" "$tmpdir/ocg" \
 chmod 600 "$rendered"
 
 # Fail closed if deployment-time values fall back to the upstream development
-# password, if runtime helper images remain mutable, if the install migration
-# Secret is still upgrade-only, or if public exposure reappears.
+# password, if install-time helper images remain mutable, or if public exposure
+# reappears.
 if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
   fail "rendered manifests still contain the upstream default database password"
 fi
@@ -115,8 +120,6 @@ fi
 if grep -Eq 'docker.io/bitnamilegacy/kubectl:[^[:space:]\"]+' "$rendered"; then
   fail "rendered manifests still contain a mutable kubectl helper image"
 fi
-grep -Fq '"helm.sh/hook": pre-install,pre-upgrade' "$rendered" || \
-  fail "rendered dbmigrator Secret is not available as a pre-install hook"
 if grep -q '^kind: Ingress$' "$rendered"; then
   fail "rendered smoke-test manifests contain an Ingress"
 fi
@@ -129,6 +132,27 @@ fi
 if grep -Eq '^[[:space:]]*hostNetwork:[[:space:]]*true[[:space:]]*$|^[[:space:]]*hostPort:[[:space:]]*[0-9]+' "$rendered"; then
   fail "rendered smoke-test manifests expose a pod through host networking or hostPort"
 fi
+
+# The inherited chart marks dbmigrator-config only as a pre-upgrade hook, while
+# its normal install Job already needs that Secret. Helm 3 does not send hooks to
+# executable post-renderers, so bootstrap exactly that existing Secret template
+# before the first install instead of editing inherited chart code. The Secret is
+# removed by cleanup after the migration has finished. Refuse upgrades here until
+# the Helm 3 hook-image path has its own immutable-image gate.
+if helm status "$RELEASE" --namespace "$NAMESPACE" >/dev/null 2>&1; then
+  fail "upgrade smoke path is not yet verified with immutable hook helper images"
+fi
+if ! kubectl get namespace "$NAMESPACE" >/dev/null 2>&1; then
+  kubectl create namespace "$NAMESPACE" >/dev/null
+fi
+helm template "$RELEASE" "$tmpdir/ocg" \
+  --namespace "$NAMESPACE" \
+  -f "$PILOT_VALUES" \
+  -f "$PRIVATE_VALUES_FILE" \
+  --show-only templates/db_migrator_secret.yaml \
+  | kubectl -n "$NAMESPACE" apply -f - >/dev/null
+bootstrap_secret_created=true
+kubectl -n "$NAMESPACE" get secret "$BOOTSTRAP_SECRET_NAME" >/dev/null
 
 info "Installing private Aachen smoke-test release..."
 helm upgrade --install "$RELEASE" "$tmpdir/ocg" \
@@ -155,10 +179,9 @@ if [[ -n "$(kubectl -n "$NAMESPACE" get ingress -l "app.kubernetes.io/instance=$
   fail "an Ingress exists for the private smoke-test release"
 fi
 
-# helm --wait --wait-for-jobs already gates normal migration Jobs. On upgrades,
-# the chart's dbmigrator is a pre-upgrade hook, and Helm blocks on Job hooks.
-# Avoid a hard-coded dbmigrator-install lookup here: repeated smoke tests use the
-# dbmigrator-upgrade hook instead, so such a lookup could inspect a stale Job.
+# helm --wait --wait-for-jobs gates the install migration Job. Future upgrades
+# remain intentionally blocked above until their hook-only helper image is also
+# immutable under Helm 3.
 
 server_deployment="$(kubectl -n "$NAMESPACE" get deployment \
   -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" \
