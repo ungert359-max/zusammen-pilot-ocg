@@ -1,5 +1,9 @@
 # Non-sensitive Helm overrides for the Aachen MVP.
 # Connection details and credentials are supplied only at deploy time.
+# The first private smoke test uses the images built and imported on the pilot host.
+
+imageTag: local
+pullPolicy: IfNotPresent
 
 images:
   provider: db
@@ -10,6 +14,11 @@ meetings:
 
 payments:
   enabled: false
+
+dbmigrator:
+  job:
+    image:
+      repository: zusammen-pilot-dbmigrator
 
 redirector:
   enabled: false
@@ -24,6 +33,8 @@ server:
     github: false
     linuxfoundation: false
   deploy:
+    image:
+      repository: zusammen-pilot-server
     replicaCount: 1
 
 postgresql:
