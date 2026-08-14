@@ -14,7 +14,7 @@ RELEASE="${AACHEN_RELEASE:-aachen-smoke}"
 LOCAL_PORT="${AACHEN_LOCAL_PORT:-18080}"
 PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-}"
 TIMEOUT="${AACHEN_TIMEOUT:-10m}"
-POSTGRES_BASE_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
+POSTGRES_BASE_DIGEST="sha256:6b638839aa8ffdc0f1e186be8a04d544368b05110a314c40d3225a15e9c9c98d"
 POSTGRES_RUNTIME_IMAGE="zusammen-pilot-postgres:local"
 KUBECTL_DIGEST="sha256:cd354d5b25562b195b277125439c23e4046902d7f1abc0dc3c75aad04d298c17"
 BOOTSTRAP_SECRET_NAME="dbmigrator-config"
@@ -35,7 +35,7 @@ done
 [[ -f "$POST_RENDERER_SOURCE" ]] || fail "Aachen runtime post-renderer is missing"
 [[ -f "$POSTGRES_DOCKERFILE" ]] || fail "Aachen PostGIS Dockerfile is missing"
 bash -n "$POST_RENDERER_SOURCE" || fail "Aachen runtime post-renderer has invalid shell syntax"
-grep -Fq "FROM docker.io/artifacthub/postgres@$POSTGRES_BASE_DIGEST" "$POSTGRES_DOCKERFILE" || \
+grep -Fq "FROM docker.io/library/postgres@$POSTGRES_BASE_DIGEST" "$POSTGRES_DOCKERFILE" || \
   fail "Aachen PostGIS image does not inherit the reviewed PostgreSQL base digest"
 
 # The pilot's database base and locally derived PostGIS image are verified only
