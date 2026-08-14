@@ -77,6 +77,12 @@ jobs:
           command -v k3s >/dev/null
           command -v curl >/dev/null
 
+          helm_version="$(helm version --short)"
+          case "$helm_version" in
+            v3.*) echo "HELM_RUNTIME=$helm_version" ;;
+            *) echo "Aachen pilot requires the reviewed Helm 3 executable post-renderer path; found $helm_version" >&2; exit 1 ;;
+          esac
+
           k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
 
           if [[ ! -d "$source_dir/.git" ]]; then
