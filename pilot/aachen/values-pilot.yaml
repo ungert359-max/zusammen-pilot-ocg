@@ -39,3 +39,8 @@ server:
 
 postgresql:
   enabled: true
+  # Upstream selects artifacthub/postgres:latest. Pin the exact amd64 image used
+  # for this pilot so a registry-side "latest" change cannot alter a deployment
+  # without a reviewed repository change.
+  image:
+    digest: sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6
