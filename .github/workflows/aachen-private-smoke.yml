@@ -6,6 +6,8 @@ on:
       - pilot-aachen-mvp
     paths:
       - .github/workflows/aachen-private-smoke.yml
+      - pilot/aachen/private-smoke-test.sh
+      - pilot/aachen/pin-runtime-images.sh
   workflow_dispatch:
 
 permissions:
