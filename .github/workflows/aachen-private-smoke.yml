@@ -49,7 +49,7 @@ jobs:
             -o ServerAliveCountMax=10 \
             -i "$HOME/.ssh/id_ed25519" \
             "$HETZNER_USER@$HETZNER_HOST" \
-            "sudo -n env PILOT_SOURCE_SHA='$PILOT_SOURCE_SHA' bash -s" <<'REMOTE'
+            "sudo -n env PILOT_SOURCE_SHA='$PILOT_SOURCE_SHA' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
           set -Eeuo pipefail
           umask 077
 
