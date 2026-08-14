@@ -18,6 +18,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
 
+      - name: Validate private smoke-test script syntax
+        run: bash -n pilot/aachen/private-smoke-test.sh
+
       - name: Set up Helm
         uses: azure/setup-helm@v4
 
