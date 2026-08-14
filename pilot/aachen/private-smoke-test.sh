@@ -48,14 +48,18 @@ esac
 # Kubernetes Secrets contain the database password and badge signing key. Do not
 # write them to the k3s datastore unless encryption at rest is actually enabled.
 secrets_status="$(k3s secrets-encrypt status 2>&1 || true)"
-printf '%s\n' "$secrets_status" | grep -q 'Encryption Status: Enabled' || \
+grep -q 'Encryption Status: Enabled' <<<"$secrets_status" || \
   fail "k3s secrets encryption at rest is not confirmed as Enabled"
 
 kubectl cluster-info >/dev/null
 
 # The pilot deliberately uses images already built and imported on this host.
+# Capture the list once: with `set -o pipefail`, piping a long `ctr images list`
+# directly into `grep -q` can turn a successful match into a false failure if
+# grep exits early and ctr receives SIGPIPE.
+images_list="$(k3s ctr images list)"
 for image_name in zusammen-pilot-server:local zusammen-pilot-dbmigrator:local; do
-  k3s ctr images list | grep -Fq "$image_name" || fail "required k3s image is missing: $image_name"
+  grep -Fq "$image_name" <<<"$images_list" || fail "required k3s image is missing: $image_name"
 done
 
 tmpdir="$(mktemp -d)"
