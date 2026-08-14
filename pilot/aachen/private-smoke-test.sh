@@ -94,6 +94,15 @@ grep -Fq "$POSTGRES_DIGEST" "$rendered" || fail "rendered PostgreSQL image is no
 if grep -q '^kind: Ingress$' "$rendered"; then
   fail "rendered smoke-test manifests contain an Ingress"
 fi
+if grep -Eq '^[[:space:]]*type:[[:space:]]*(NodePort|LoadBalancer)[[:space:]]*$' "$rendered"; then
+  fail "rendered smoke-test manifests contain a NodePort or LoadBalancer service"
+fi
+if grep -Eq '^[[:space:]]*externalIPs:[[:space:]]*' "$rendered"; then
+  fail "rendered smoke-test manifests configure external service IPs"
+fi
+if grep -Eq '^[[:space:]]*hostNetwork:[[:space:]]*true[[:space:]]*$|^[[:space:]]*hostPort:[[:space:]]*[0-9]+' "$rendered"; then
+  fail "rendered smoke-test manifests expose a pod through host networking or hostPort"
+fi
 
 info "Installing private Aachen smoke-test release..."
 helm upgrade --install "$RELEASE" "$tmpdir/ocg" \
