@@ -6,6 +6,13 @@ on:
       - pilot-aachen-mvp
     paths:
       - .github/workflows/aachen-host-images.yml
+      - .dockerignore
+      - Cargo.*
+      - docs/**
+      - ocg-common/**
+      - ocg-redirector/**
+      - ocg-server/**
+      - database/migrations/**
       - pilot/aachen/postgres-postgis/**
       - pilot/aachen/pin-runtime-images.sh
       - pilot/aachen/values-pilot.yaml
