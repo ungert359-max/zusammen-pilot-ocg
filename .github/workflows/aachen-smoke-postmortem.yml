@@ -1,0 +1,59 @@
+name: Aachen smoke timeout diagnostics
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+    paths:
+      - .github/workflows/aachen-smoke-postmortem.yml
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      HETZNER_HOST: 178.104.6.218
+      HETZNER_USER: deploy
+    steps:
+      - name: Prepare pinned SSH connection
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Read non-secret smoke namespace evidence
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          namespace=ocg-aachen-smoke
+          echo '=== HELM RELEASES ==='
+          helm list --namespace "$namespace" || true
+          echo '=== WORKLOAD/PVC SNAPSHOT ==='
+          kubectl -n "$namespace" get pods,jobs,pvc -o wide 2>/dev/null || true
+          echo '=== RECENT WARNING EVENTS ==='
+          kubectl -n "$namespace" get events --field-selector type=Warning --sort-by=.lastTimestamp 2>/dev/null | tail -n 80 || true
+          echo '=== RECENT NORMAL EVENTS (LAST 40) ==='
+          kubectl -n "$namespace" get events --field-selector type=Normal --sort-by=.lastTimestamp 2>/dev/null | tail -n 40 || true
+          REMOTE
