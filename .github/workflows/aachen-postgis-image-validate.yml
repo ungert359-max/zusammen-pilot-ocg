@@ -1,0 +1,67 @@
+name: Aachen PostGIS image validation
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+    paths:
+      - pilot/aachen/postgres-postgis/**
+      - .github/workflows/aachen-postgis-image-validate.yml
+  pull_request:
+    branches:
+      - main
+    paths:
+      - pilot/aachen/postgres-postgis/**
+      - .github/workflows/aachen-postgis-image-validate.yml
+
+permissions:
+  contents: read
+
+jobs:
+  postgis:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Build pilot-only PostgreSQL image
+        run: >-
+          docker build
+          -f pilot/aachen/postgres-postgis/Dockerfile
+          -t zusammen-pilot-postgres:ci
+          .
+
+      - name: Prove PostGIS extension can be created
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          container=zusammen-pilot-postgis-ci
+          cleanup() {
+            docker logs "$container" >/tmp/aachen-postgis.log 2>&1 || true
+            docker rm -f "$container" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT INT TERM
+
+          docker run -d \
+            --name "$container" \
+            -e POSTGRES_PASSWORD=ci-only-not-a-secret \
+            zusammen-pilot-postgres:ci >/dev/null
+
+          ready=false
+          for _ in $(seq 1 30); do
+            if docker exec "$container" pg_isready -U postgres >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 1
+          done
+          [[ "$ready" == true ]] || {
+            docker logs "$container" >&2
+            exit 1
+          }
+
+          docker exec "$container" \
+            psql -v ON_ERROR_STOP=1 -U postgres -d postgres \
+            -c 'CREATE EXTENSION postgis;' \
+            -c 'SELECT PostGIS_Full_Version();'
