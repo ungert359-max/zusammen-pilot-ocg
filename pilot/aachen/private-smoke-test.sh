@@ -12,6 +12,7 @@ RELEASE="${AACHEN_RELEASE:-aachen-smoke}"
 LOCAL_PORT="${AACHEN_LOCAL_PORT:-18080}"
 PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-}"
 TIMEOUT="${AACHEN_TIMEOUT:-10m}"
+POSTGRES_DIGEST="sha256:411febeab51f103cd36aa8655bebb3c4035974e0d6f6929a56fe863ad8c581b6"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -25,6 +26,9 @@ info() {
 for command_name in helm kubectl curl k3s grep awk sed stat mktemp; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
+
+# The pilot's pinned PostgreSQL digest is the verified linux/amd64 image.
+[[ "$(uname -m)" == "x86_64" ]] || fail "this smoke-test profile is pinned for linux/amd64 (x86_64)"
 
 [[ -n "$PRIVATE_VALUES_FILE" ]] || fail "set AACHEN_PRIVATE_VALUES_FILE to a private Helm values file outside this repository"
 [[ -f "$PRIVATE_VALUES_FILE" ]] || fail "private values file does not exist"
@@ -82,10 +86,11 @@ helm template "$RELEASE" "$tmpdir/ocg" \
 chmod 600 "$rendered"
 
 # Fail closed if deployment-time values fall back to the upstream development
-# password or accidentally re-enable public exposure.
+# password, if PostgreSQL is not digest-pinned, or if public exposure reappears.
 if grep -Eq '^[[:space:]]*password:[[:space:]]*ocg[[:space:]]*$|^[[:space:]]*password[[:space:]]*=[[:space:]]*ocg[[:space:]]*$' "$rendered"; then
   fail "rendered manifests still contain the upstream default database password"
 fi
+grep -Fq "$POSTGRES_DIGEST" "$rendered" || fail "rendered PostgreSQL image is not pinned to the reviewed digest"
 if grep -q '^kind: Ingress$' "$rendered"; then
   fail "rendered smoke-test manifests contain an Ingress"
 fi
