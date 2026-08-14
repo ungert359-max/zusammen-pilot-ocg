@@ -15,6 +15,10 @@ redirector:
   enabled: false
 
 server:
+  ingress:
+    enabled: false
+  service:
+    type: ClusterIP
   login:
     email: true
     github: false
