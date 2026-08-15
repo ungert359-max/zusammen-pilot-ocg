@@ -50,7 +50,7 @@ jobs:
              echo "REMOTE_USER=$(id -un)"
              echo "REMOTE_HOST=$(hostname)"
              echo "REMOTE_ARCH=$(uname -m)"
-             for c in git helm k3s docker kubectl; do
+             for c in git helm k3s docker kubectl python3; do
                if command -v "$c" >/dev/null 2>&1; then echo "TOOL_$c=present"; else echo "TOOL_$c=missing"; fi
              done
              if sudo -n true >/dev/null 2>&1; then
@@ -69,6 +69,11 @@ jobs:
                $K -n ocg-aachen-smoke get pods,svc,pvc -o wide 2>/dev/null || true
                $K -n ocg-aachen-smoke get events --sort-by=.lastTimestamp 2>/dev/null | tail -n 20 || true
                echo "RUNTIME_STATE_END"
+               echo "SERVER_CONTAINER_EXIT_DIAGNOSTICS_BEGIN"
+               for cid in $(sudo -n k3s crictl ps -a --name server -q 2>/dev/null | head -n 5 || true); do
+                 sudo -n k3s crictl inspect "$cid" 2>/dev/null | python3 -c "import json,sys; d=json.load(sys.stdin).get('status',{}); print('SERVER_CONTAINER id=%s state=%s exit=%s reason=%s started=%s finished=%s' % (sys.argv[1], d.get('state',''), d.get('exitCode',''), d.get('reason',''), d.get('startedAt',''), d.get('finishedAt','')))" "$cid" || true
+               done
+               echo "SERVER_CONTAINER_EXIT_DIAGNOSTICS_END"
                echo "MIGRATION_DIAGNOSTICS_BEGIN"
                migrator_pod="$($K -n ocg-aachen-smoke get pods -l job-name=dbmigrator-install --sort-by=.metadata.creationTimestamp -o name 2>/dev/null | tail -n 1 || true)"
                if [ -n "$migrator_pod" ]; then
