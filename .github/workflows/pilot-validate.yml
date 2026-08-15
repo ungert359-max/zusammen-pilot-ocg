@@ -4,9 +4,13 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+    paths-ignore:
+      - pilot/aachen/DEPLOYMENT-GATES.md
   pull_request:
     branches:
       - main
+    paths-ignore:
+      - pilot/aachen/DEPLOYMENT-GATES.md
 
 permissions:
   contents: read
