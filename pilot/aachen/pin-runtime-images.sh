@@ -54,6 +54,54 @@ if ! awk -v image="$POSTGRES_RUNTIME_IMAGE" '
   exit 1
 fi
 
+# The upstream chart always renders OAuth2/OIDC provider maps even when those
+# login routes are disabled. The server initializes every rendered provider at
+# startup, so unresolved upstream placeholder URLs can abort a private pilot
+# before it binds port 9000. For Aachen, external login is intentionally OFF:
+# remove those provider definitions from the rendered server configuration while
+# leaving email login and all application code untouched. Fail closed if the
+# expected disabled-login shape is not present.
+python3 - "$tmp_out" <<'PY'
+from pathlib import Path
+import sys
+
+path = Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+
+for marker in ("        github: false", "        linuxfoundation: false"):
+    matches = [line for line in lines if line.rstrip("\r\n") == marker]
+    if len(matches) != 1:
+        raise SystemExit(f"Aachen post-renderer: expected exactly one disabled login marker: {marker.strip()}")
+
+
+def replace_server_mapping(key: str) -> None:
+    needle = f"      {key}:"
+    starts = [i for i, line in enumerate(lines) if line.rstrip("\r\n") == needle]
+    if len(starts) != 1:
+        raise SystemExit(f"Aachen post-renderer: expected exactly one server {key} mapping")
+
+    start = starts[0]
+    end = start + 1
+    while end < len(lines):
+        raw = lines[end].rstrip("\r\n")
+        if raw:
+            indent = len(raw) - len(raw.lstrip(" "))
+            if indent <= 6:
+                break
+        end += 1
+    lines[start:end] = [f"      {key}: {{}}\n"]
+
+
+replace_server_mapping("oauth2")
+replace_server_mapping("oidc")
+rendered = "".join(lines)
+if "{YOUR_" in rendered:
+    raise SystemExit("Aachen post-renderer: unresolved upstream URL placeholder survived rendering")
+if rendered.count("      oauth2: {}\n") != 1 or rendered.count("      oidc: {}\n") != 1:
+    raise SystemExit("Aachen post-renderer: disabled external-auth maps were not normalized exactly once")
+path.write_text(rendered, encoding="utf-8")
+PY
+
 # Fail closed if reviewed mutable/external PostgreSQL helper references survive
 # or if the local PostGIS-enabled image was not rendered.
 if grep -Fq 'artifacthub/postgres' "$tmp_out"; then
