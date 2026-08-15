@@ -14,9 +14,6 @@ on:
       - ocg-server/**
       - database/migrations/**
       - pilot/aachen/postgres-postgis/**
-      - pilot/aachen/pin-runtime-images.sh
-      - pilot/aachen/values-pilot.yaml
-      - pilot/aachen/private-smoke-test.sh
   workflow_dispatch:
 
 permissions:
