@@ -13,6 +13,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: aachen-private-runtime-smoke
+  cancel-in-progress: false
+
 jobs:
   private-smoke:
     runs-on: ubuntu-latest
@@ -247,6 +251,15 @@ jobs:
           test "$(grep -c '^email:$' "$private_values")" = 1
           grep -Fq "fromAddress: '\"noreply@aachen.invalid\"'" "$private_values"
           grep -Fq "rcptsWhitelist: []" "$private_values"
+
+          # This namespace/release is dedicated to this private smoke workflow.
+          # Successful runs deliberately keep the known-good smoke release alive
+          # for evidence; before the next serialized run, replace it with a fresh
+          # install rather than exercising the still-unverified Helm upgrade path.
+          if helm status aachen-smoke --namespace ocg-aachen-smoke >/dev/null 2>&1; then
+            helm uninstall aachen-smoke --namespace ocg-aachen-smoke --wait --timeout 2m >/dev/null
+          fi
+
           cd "$source_dir"
           AACHEN_PRIVATE_VALUES_FILE="$private_values" \
           AACHEN_TIMEOUT=12m \
