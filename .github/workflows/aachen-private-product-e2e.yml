@@ -54,7 +54,7 @@ jobs:
             local label="$2"
             local response count status conclusion
 
-            for _ in $(seq 1 90); do
+            for _ in $(seq 1 180); do
               response="$(curl --fail --silent --show-error \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H 'Accept: application/vnd.github+json' \
@@ -184,6 +184,25 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+
+          # The upstream test helpers use a 5s per-navigation budget tuned for a local
+          # server. This private gate crosses GitHub -> SSH -> kubectl port-forward,
+          # while the application binary itself remains untouched. Adjust only the
+          # ephemeral runner checkout so the same upstream product assertions can run
+          # over that deliberately slower transport.
+          python3 - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/e2e/utils.js")
+          text = path.read_text()
+          source = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;"
+          target = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;"
+          if text.count(source) != 1:
+              raise SystemExit("expected exactly one upstream navigation timeout constant")
+          path.write_text(text.replace(source, target))
+          PY
+          grep -Fq 'const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;' tests/e2e/utils.js
+
           AACHEN_E2E_SSH_HOST="$HETZNER_HOST" \
           AACHEN_E2E_SSH_USER="$HETZNER_USER" \
           AACHEN_E2E_SSH_KEY_FILE="$HOME/.ssh/id_ed25519" \
@@ -191,6 +210,7 @@ jobs:
           AACHEN_E2E_NAMESPACE="$AACHEN_E2E_NAMESPACE" \
           AACHEN_E2E_RELEASE="$AACHEN_E2E_RELEASE" \
           AACHEN_E2E_INSTALL_BROWSER=true \
+          AACHEN_E2E_TEST_TIMEOUT_MS=300000 \
           bash pilot/aachen/private-product-e2e-run.sh
 
       - name: Remove dedicated synthetic E2E namespace
