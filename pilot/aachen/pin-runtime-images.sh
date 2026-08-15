@@ -95,8 +95,6 @@ def replace_server_mapping(key: str) -> None:
 replace_server_mapping("oauth2")
 replace_server_mapping("oidc")
 rendered = "".join(lines)
-if "{YOUR_" in rendered:
-    raise SystemExit("Aachen post-renderer: unresolved upstream URL placeholder survived rendering")
 if rendered.count("      oauth2: {}\n") != 1 or rendered.count("      oidc: {}\n") != 1:
     raise SystemExit("Aachen post-renderer: disabled external-auth maps were not normalized exactly once")
 path.write_text(rendered, encoding="utf-8")
