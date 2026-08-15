@@ -24,7 +24,7 @@ This file tracks the minimum technical gates before the Aachen pilot is exposed 
 
 The current fully verified private runtime control stand is:
 
-- Control commit: `05e596a1eac2b1714b73cc83ce074c57ca32428a`
+- Control commit: `36ebb0d0f1568772be94013df566b0b6f78d13ed`
 - Host image build basis: `696dfe8b100f15f2a5488d4841de5bfa344339be`
 - PostgreSQL image digest: `sha256:c6c4e196d49182e54c7951fa629f5bce71e7ff7f17610f6960251cfeefbea4eb`
 - Server image digest: `sha256:c269e39c80f94a8defe53cf543aba367542faf94fe266abc53c18411fcfe71c5`
@@ -32,7 +32,7 @@ The current fully verified private runtime control stand is:
 
 For that exact control/image combination, GitHub Actions evidence is green for Aachen pilot validation, upstream-core integrity and the private exact-image runtime smoke. The smoke explicitly reported `PASS: PostgreSQL/migration/server startup and /health-check succeeded without public Ingress.`
 
-The successful smoke also recorded PostgreSQL `Running`, the migration pod `Completed`, the server `Running`, the PostgreSQL PVC `Bound` at 8 GiB, and a loopback-only health check. These measurements are operational evidence only and must not be treated as a validated minimum hardware profile.
+The successful smoke recorded PostgreSQL `1/1 Running`, the migration pod `Completed`, the server `1/1 Running`, zero restarts for all three, and the PostgreSQL PVC `Bound` at 8 GiB. The same run measured PostgreSQL at approximately `99m` CPU / `141Mi` memory and the server at approximately `18m` CPU / `13Mi` memory. These measurements are operational evidence only and must not be treated as a validated minimum hardware profile.
 
 ## Rules
 
@@ -58,15 +58,18 @@ The disable/rollback path and graceful degradation must be tested before first a
 
 The upstream OCG test suite already contains concrete synthetic E2E coverage for the core journey needed by the Aachen pilot. This is useful baseline evidence that the required OCG product paths exist before any Aachen-specific product change is considered:
 
-- `tests/e2e/dashboard/group/events/events.spec.js` creates an organizer event through the dashboard, verifies the created row, and exercises cancellation/deletion cleanup. The same suite verifies attendee-count/capacity rendering for capped events.
-- `tests/e2e/site/event/waitlist.spec.js` verifies that a member can join and leave a full event's waitlist and that a failed waitlist request returns to a retryable state.
+- `tests/e2e/workflows/events/events.spec.js` creates an organizer event through the dashboard, verifies the created row, and exercises deletion cleanup. The broader suite also verifies attendee-count/capacity behavior.
+- `tests/e2e/workflows/rsvp/rsvp.spec.js` verifies an approval-required RSVP flow through offer claim/checkout.
+- `tests/e2e/workflows/waitlist/waitlist.spec.js` verifies waitlist join, promotion after capacity is released, and offer claim through checkout.
 - `tests/e2e/site/event/check-in.spec.js` verifies registration before check-in, organizer-side check-in, the public check-in form, and the visible checked-in success state.
 - The relevant flows use synthetic seeded E2E users/data and local test infrastructure; they are not evidence that the private Hetzner pilot runtime itself has completed the same product journey.
 
-Accordingly, the private-runtime E2E checkbox above remains intentionally **unchecked**. No Aachen product behavior, UI, database schema or upstream core code needs to be changed merely to establish that these capabilities already exist in OCG.
+The pilot now also contains isolated preparation and loopback-only runner controls under `pilot/aachen/private-product-e2e-prepare.sh` and `pilot/aachen/private-product-e2e-run.sh`. They remain separate from the known-good smoke namespace, require private `ClusterIP`/no-Ingress operation, use only committed synthetic fixtures, and keep payments/meetings disabled for this first product gate.
+
+Accordingly, the private-runtime E2E checkbox above remains intentionally **unchecked** until the complete selected journey has actually passed against the private pilot runtime. No Aachen product behavior, UI, database schema or upstream core code needs to be changed merely to execute this gate.
 
 ## Immediate next gate
 
-Keep the verified runtime/image combination above as the rollback reference. The remaining non-Core product gate is to exercise the already-existing OCG journey against the private pilot runtime with synthetic data only: organizer-created event, RSVP/capacity/waitlist and check-in, without public Ingress, real email, paid services or real user data.
+Keep the verified runtime/image combination above as the rollback reference. The remaining non-Core product gate is to execute the already-prepared synthetic journey against the private pilot runtime through the loopback-only runner: organizer-created event, RSVP/capacity/waitlist and check-in, without public Ingress, real email, paid services or real user data.
 
 Reuse the upstream E2E contracts above as the expected behavior rather than inventing a parallel Aachen product implementation. Any failure must first be isolated to pilot configuration, CI/deployment or an additive Aachen adapter. If correcting it would require a change to `ocg-server/**`, `ocg-common/**`, `ocg-redirector/**`, `database/migrations/**` or visible OCG product/UI logic, stop before that change and require separate approval.
