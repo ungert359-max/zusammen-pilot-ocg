@@ -206,9 +206,24 @@ jobs:
           if config_text.count(expect_source) != 1:
               raise SystemExit("expected exactly one upstream expect configuration block")
           config_path.write_text(config_text.replace(expect_source, expect_target))
+
+          waitlist_path = Path("tests/e2e/workflows/waitlist/waitlist.spec.js")
+          waitlist_text = waitlist_path.read_text()
+          cleanup_source = '''  test.afterEach(async ({ member2Page, organizerGroupPage }) => {
+            await restoreSeededWaitlistEvent(member2Page, organizerGroupPage);
+          });'''
+          cleanup_target = '''  // The dedicated Aachen E2E namespace is deleted after this one-test run,
+          // so restoring mutable fixture state here is redundant and must not mask
+          // a completed waitlist journey when remote UI cleanup is slow.
+          test.afterEach(async () => {});'''
+          if waitlist_text.count(cleanup_source) != 1:
+              raise SystemExit("expected exactly one upstream waitlist afterEach cleanup hook")
+          waitlist_path.write_text(waitlist_text.replace(cleanup_source, cleanup_target))
           PY
           grep -Fq 'const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;' tests/e2e/utils.js
           grep -Fq '    timeout: 30_000,' tests/e2e/playwright.config.js
+          grep -Fq 'test.afterEach(async () => {});' tests/e2e/workflows/waitlist/waitlist.spec.js
+          grep -Fq 'await restoreSeededWaitlistEvent(member2Page, organizerGroupPage);' tests/e2e/workflows/waitlist/waitlist.spec.js
 
           AACHEN_E2E_SSH_HOST="$HETZNER_HOST" \
           AACHEN_E2E_SSH_USER="$HETZNER_USER" \
