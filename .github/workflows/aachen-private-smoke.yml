@@ -103,15 +103,15 @@ jobs:
           test "$(git -C "$source_dir" rev-parse HEAD)" = "$control_sha"
 
           # Reuse the already verified application images only while every change
-          # since their build is confined to pilot control/validation files.
+          # since their build is confined to image-neutral CI or Aachen pilot
+          # controls. The PostgreSQL image context remains a hard block, and any
+          # path outside these two control scopes fails closed by default.
           unexpected_changes="$(
             git -C "$source_dir" diff --name-only "$image_sha" "$control_sha" -- | while IFS= read -r path; do
               case "$path" in
-                .github/workflows/aachen-private-smoke.yml|\
-                .github/workflows/aachen-remote-probe.yml|\
-                .github/workflows/pilot-validate.yml|\
-                pilot/aachen/private-smoke-test.sh|\
-                pilot/aachen/pin-runtime-images.sh) ;;
+                .github/workflows/*) ;;
+                pilot/aachen/postgres-postgis/*) printf '%s\n' "$path" ;;
+                pilot/aachen/*) ;;
                 *) printf '%s\n' "$path" ;;
               esac
             done
