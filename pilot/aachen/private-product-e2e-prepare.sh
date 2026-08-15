@@ -144,12 +144,27 @@ PY
 )"
 [[ -n "$db_password" ]] || fail "database password could not be resolved from private values"
 
+# The committed E2E SQL imports two badge images with psql \lo_import. Because
+# psql runs inside the isolated PostgreSQL pod, stage only those committed
+# synthetic assets into a private temporary working directory in that pod.
+fixture_workdir="/tmp/ocg-aachen-e2e-fixtures"
+fixture_badge_dir="$fixture_workdir/ocg-server/static/images/e2e/badges"
+for badge_file in host.png speaker.png; do
+  source_badge="$REPO_ROOT/ocg-server/static/images/e2e/badges/$badge_file"
+  [[ -f "$source_badge" ]] || fail "required committed E2E badge asset is missing: $badge_file"
+  kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
+    sh -c 'set -eu; umask 077; mkdir -p "$1"; cat > "$1/$2"' \
+    sh "$fixture_badge_dir" "$badge_file" \
+    < "$source_badge"
+done
+
 # Load only the repository's committed synthetic fixtures. Suppress normal psql
 # output so the log contains neither private values nor a dump of fixture data.
 info "Loading committed synthetic OCG E2E fixtures into the isolated database..."
 kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- \
   env PGPASSWORD="$db_password" \
-  psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ocg -d ocg \
+  sh -c 'set -eu; cd "$1"; exec psql -v ON_ERROR_STOP=1 -h 127.0.0.1 -U ocg -d ocg' \
+  sh "$fixture_workdir" \
   < "$SEED_SQL" >/dev/null
 
 # Match the public Playwright fixture credentials without printing credentials or
