@@ -62,16 +62,7 @@ jobs:
                 "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=pilot-aachen-mvp&head_sha=${GITHUB_SHA}&per_page=1")"
 
               read -r count status conclusion < <(
-                python3 -c '
-import json, sys
-payload = json.load(sys.stdin)
-runs = payload.get("workflow_runs", [])
-if not runs:
-    print(0, "missing", "none")
-else:
-    run = runs[0]
-    print(1, run.get("status", "unknown"), run.get("conclusion") or "none")
-' <<<"$response"
+                python3 -c 'import json,sys; payload=json.load(sys.stdin); runs=payload.get("workflow_runs", []); print(0, "missing", "none") if not runs else print(1, runs[0].get("status", "unknown"), runs[0].get("conclusion") or "none")' <<<"$response"
               )
 
               if [[ "$count" == 1 && "$status" == completed ]]; then
