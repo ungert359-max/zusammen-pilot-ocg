@@ -11,14 +11,28 @@ This file tracks the minimum technical gates before the Aachen pilot is exposed 
 - [x] Kubernetes manifests render successfully.
 - [x] Database migrator container builds successfully in GitHub Actions.
 - [x] Application container builds successfully in GitHub Actions.
-- [ ] k3s secrets encryption at rest is confirmed `Enabled` before private deployment secrets are written to the cluster.
-- [ ] Runtime smoke test starts PostgreSQL, runs migrations, starts OCG and returns a successful `/health-check` response.
-- [ ] Minimum CPU, RAM and storage for the pilot host are confirmed from the runtime test.
-- [x] Public pilot host is provisioned.
-- [ ] Domain and HTTPS are connected.
-- [ ] Transactional email is connected and signup/login flows are tested.
-- [ ] Organizer-created event, RSVP, capacity, waitlist and check-in are verified end to end.
+- [x] k3s secrets encryption at rest is confirmed `Enabled` before private deployment secrets are written to the cluster.
+- [x] Runtime smoke test starts PostgreSQL, runs migrations, starts OCG and returns a successful `/health-check` response without public Ingress.
+- [ ] Minimum CPU, RAM and storage for the pilot host are confirmed from a dedicated capacity/load test. The successful runtime smoke measured the current host and pods, but that measurement is not a minimum-capacity proof.
+- [x] Public pilot host is provisioned, while the OCG pilot runtime remains private/no-Ingress.
+- [ ] Domain and HTTPS are connected. This remains blocked until separately approved.
+- [ ] Transactional email is connected and signup/login flows are tested. Real email remains blocked until separately approved.
+- [ ] Organizer-created event, RSVP, capacity, waitlist and check-in are verified end to end against the private pilot runtime.
 - [ ] Every Aachen-specific Map/Explore enrichment that adds database work has passed the binding DB-cost and isolation gate in `docs/decisions/map-query-cost-and-isolation-gate.md` before its feature flag is enabled.
+
+## Last known good runtime
+
+The current fully verified private runtime control stand is:
+
+- Control commit: `05e596a1eac2b1714b73cc83ce074c57ca32428a`
+- Host image build basis: `696dfe8b100f15f2a5488d4841de5bfa344339be`
+- PostgreSQL image digest: `sha256:c6c4e196d49182e54c7951fa629f5bce71e7ff7f17610f6960251cfeefbea4eb`
+- Server image digest: `sha256:c269e39c80f94a8defe53cf543aba367542faf94fe266abc53c18411fcfe71c5`
+- Migrator image digest: `sha256:b70a2505bd92b9ba74ee885a0026af8855595601a78c59c68d72c38458f0cbb7`
+
+For that exact control/image combination, GitHub Actions evidence is green for Aachen pilot validation, upstream-core integrity and the private exact-image runtime smoke. The smoke explicitly reported `PASS: PostgreSQL/migration/server startup and /health-check succeeded without public Ingress.`
+
+The successful smoke also recorded PostgreSQL `Running`, the migration pod `Completed`, the server `Running`, the PostgreSQL PVC `Bound` at 8 GiB, and a loopback-only health check. These measurements are operational evidence only and must not be treated as a validated minimum hardware profile.
 
 ## Rules
 
@@ -28,8 +42,9 @@ This file tracks the minimum technical gates before the Aachen pilot is exposed 
 - Keep deployment secrets in a local values file outside the Git repository or an equivalent secret store.
 - Do not write OCG deployment secrets into the k3s datastore unless secrets encryption at rest is confirmed enabled.
 - Do not change the separate `app-mobile-greenfield` repository as part of this pilot.
-- Do not connect the public domain until the runtime smoke test is green.
+- Do not connect the public domain, enable public Ingress, activate real transactional email or collect real user data without separate explicit approval.
 - Do not activate a Map/Explore enrichment merely because it builds or appears correct. Its concrete database query and its failure-isolation path must be measured and verified first.
+- Do not promote a new control or image stand over the last known good runtime until all regression-relevant gates for that change are green.
 
 ## Binding DB-cost and Map-isolation gate
 
@@ -41,6 +56,6 @@ The disable/rollback path and graceful degradation must be tested before first a
 
 ## Immediate next gate
 
-Use `pilot/aachen/private-smoke-test.sh` on the provisioned pilot host. The script is deliberately fail-closed: it requires a private values file outside the repository with restrictive permissions, confirms k3s secrets encryption at rest, confirms the host-built application images are present, resolves Helm dependencies in a temporary chart copy, rejects the upstream default database password and any rendered Ingress, installs atomically, verifies the migration job and server rollout, checks that the server Service is `ClusterIP`, and reaches `/health-check` only through a loopback Kubernetes port-forward.
+Keep the verified runtime/image combination above as the rollback reference. The next non-Core step is to verify existing OCG pilot behavior end to end on the private runtime—starting with organizer-created event, RSVP/capacity/waitlist/check-in paths—without public Ingress, real email, paid services or real user data.
 
-Only after that succeeds should the domain, HTTPS and transactional email be connected.
+Any failure must first be isolated to pilot configuration, CI/deployment or an additive Aachen adapter. If correcting it would require a change to `ocg-server/**`, `ocg-common/**`, `ocg-redirector/**`, `database/migrations/**` or visible OCG product/UI logic, stop before that change and require separate approval.
