@@ -57,13 +57,13 @@ jobs:
                echo "SUDO_NONINTERACTIVE=yes"
                sudo -n k3s secrets-encrypt status || true
                echo "POSTGRES_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list name==zusammen-pilot-postgres:local || true
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-postgres:local"
                echo "POSTGRES_IMAGE_CHECK_END"
                echo "SERVER_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list name==zusammen-pilot-server:local || true
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-server:local"
                echo "SERVER_IMAGE_CHECK_END"
                echo "MIGRATOR_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list name==zusammen-pilot-dbmigrator:local || true
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-dbmigrator:local"
                echo "MIGRATOR_IMAGE_CHECK_END"
                echo "DEPENDENCY_IMAGE_DIGESTS_BEGIN"
                sudo -n k3s ctr images list | grep -E "artifacthub/postgres|bitnamilegacy/kubectl" || true
