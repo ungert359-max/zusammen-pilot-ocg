@@ -28,7 +28,60 @@ info() {
   printf '%s\n' "$*"
 }
 
-for command_name in helm kubectl curl k3s grep awk sed stat mktemp; do
+sanitize_diagnostics() {
+  python3 -c '
+import pathlib
+import re
+import sys
+
+private_values = pathlib.Path(sys.argv[1]).read_text(encoding="utf-8", errors="replace")
+secrets = []
+for line in private_values.splitlines():
+    match = re.match(r"\s*(?:password|d):\s*[\"\x27]?([^\"\x27#\s]+)", line)
+    if match and len(match.group(1)) >= 8:
+        secrets.append(match.group(1))
+
+text = sys.stdin.read()
+for secret in secrets:
+    text = text.replace(secret, "[REDACTED]")
+text = re.sub(
+    r"(?i)(password|passwd|pwd|secret|token|authorization|cookie|private[_-]?key)(\s*[:=]\s*)([^\s,;]+)",
+    r"\1\2[REDACTED]",
+    text,
+)
+text = re.sub(r"(?i)(postgres(?:ql)?://)([^@\s]+)@", r"\1[REDACTED]@", text)
+sys.stdout.write(text)
+' "$PRIVATE_VALUES_FILE"
+}
+
+print_failure_diagnostics() {
+  info "Helm install failed; collecting secret-redacted diagnostics before cleanup."
+  kubectl -n "$NAMESPACE" get pods,pvc -o wide 2>&1 | sanitize_diagnostics || true
+  kubectl -n "$NAMESPACE" get job dbmigrator-install -o wide 2>&1 | sanitize_diagnostics || true
+
+  server_pods="$(kubectl -n "$NAMESPACE" get pods \
+    -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" \
+    -o name 2>/dev/null || true)"
+  for server_pod in $server_pods; do
+    info "SERVER_POD=$server_pod"
+    kubectl -n "$NAMESPACE" get "$server_pod" \
+      -o jsonpath='phase={.status.phase}{" waiting="}{.status.containerStatuses[0].state.waiting.reason}{" terminated="}{.status.containerStatuses[0].lastState.terminated.reason}{" exitCode="}{.status.containerStatuses[0].lastState.terminated.exitCode}{" restarts="}{.status.containerStatuses[0].restartCount}{"\n"}' \
+      2>&1 | sanitize_diagnostics || true
+    server_container="$(kubectl -n "$NAMESPACE" get "$server_pod" -o jsonpath='{.spec.containers[0].name}' 2>/dev/null || true)"
+    if [[ -n "$server_container" ]]; then
+      info "SERVER_CONTAINER=$server_container"
+      kubectl -n "$NAMESPACE" logs "$server_pod" -c "$server_container" --tail=120 2>&1 \
+        | sanitize_diagnostics || true
+      kubectl -n "$NAMESPACE" logs "$server_pod" -c "$server_container" --previous --tail=120 2>&1 \
+        | sanitize_diagnostics || true
+    fi
+  done
+
+  kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp 2>&1 \
+    | tail -n 80 | sanitize_diagnostics || true
+}
+
+for command_name in helm kubectl curl k3s grep awk sed stat mktemp python3; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
 
@@ -163,6 +216,7 @@ bootstrap_secret_created=true
 kubectl -n "$NAMESPACE" get secret "$BOOTSTRAP_SECRET_NAME" >/dev/null
 
 info "Installing private Aachen smoke-test release..."
+set +e
 helm upgrade --install "$RELEASE" "$tmpdir/ocg" \
   --namespace "$NAMESPACE" \
   --create-namespace \
@@ -171,8 +225,14 @@ helm upgrade --install "$RELEASE" "$tmpdir/ocg" \
   --post-renderer "$post_renderer" \
   --wait \
   --wait-for-jobs \
-  --atomic \
   --timeout "$TIMEOUT"
+helm_rc=$?
+set -e
+if [[ "$helm_rc" -ne 0 ]]; then
+  print_failure_diagnostics
+  helm uninstall "$RELEASE" --namespace "$NAMESPACE" --wait --timeout 2m >/dev/null 2>&1 || true
+  fail "Helm install failed with exit code $helm_rc; release cleanup attempted after diagnostics"
+fi
 
 server_service="$(kubectl -n "$NAMESPACE" get service \
   -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" \
