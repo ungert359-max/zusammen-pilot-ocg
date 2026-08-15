@@ -54,8 +54,19 @@ For every optional Map/Explore enrichment, activation is blocked until the concr
 
 The disable/rollback path and graceful degradation must be tested before first activation. The complete binding criteria live in `docs/decisions/map-query-cost-and-isolation-gate.md`.
 
+## Existing upstream product-E2E baseline
+
+The upstream OCG test suite already contains concrete synthetic E2E coverage for the core journey needed by the Aachen pilot. This is useful baseline evidence that the required OCG product paths exist before any Aachen-specific product change is considered:
+
+- `tests/e2e/dashboard/group/events/events.spec.js` creates an organizer event through the dashboard, verifies the created row, and exercises cancellation/deletion cleanup. The same suite verifies attendee-count/capacity rendering for capped events.
+- `tests/e2e/site/event/waitlist.spec.js` verifies that a member can join and leave a full event's waitlist and that a failed waitlist request returns to a retryable state.
+- `tests/e2e/site/event/check-in.spec.js` verifies registration before check-in, organizer-side check-in, the public check-in form, and the visible checked-in success state.
+- The relevant flows use synthetic seeded E2E users/data and local test infrastructure; they are not evidence that the private Hetzner pilot runtime itself has completed the same product journey.
+
+Accordingly, the private-runtime E2E checkbox above remains intentionally **unchecked**. No Aachen product behavior, UI, database schema or upstream core code needs to be changed merely to establish that these capabilities already exist in OCG.
+
 ## Immediate next gate
 
-Keep the verified runtime/image combination above as the rollback reference. The next non-Core step is to verify existing OCG pilot behavior end to end on the private runtime—starting with organizer-created event, RSVP/capacity/waitlist/check-in paths—without public Ingress, real email, paid services or real user data.
+Keep the verified runtime/image combination above as the rollback reference. The remaining non-Core product gate is to exercise the already-existing OCG journey against the private pilot runtime with synthetic data only: organizer-created event, RSVP/capacity/waitlist and check-in, without public Ingress, real email, paid services or real user data.
 
-Any failure must first be isolated to pilot configuration, CI/deployment or an additive Aachen adapter. If correcting it would require a change to `ocg-server/**`, `ocg-common/**`, `ocg-redirector/**`, `database/migrations/**` or visible OCG product/UI logic, stop before that change and require separate approval.
+Reuse the upstream E2E contracts above as the expected behavior rather than inventing a parallel Aachen product implementation. Any failure must first be isolated to pilot configuration, CI/deployment or an additive Aachen adapter. If correcting it would require a change to `ocg-server/**`, `ocg-common/**`, `ocg-redirector/**`, `database/migrations/**` or visible OCG product/UI logic, stop before that change and require separate approval.
