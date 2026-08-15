@@ -46,7 +46,7 @@ require_dedicated_identity() {
   [[ "$RELEASE" != "aachen-smoke" ]] || fail "refusing to reuse the known-good smoke release"
 }
 
-for command_name in bash curl npm node ssh grep stat readlink; do
+for command_name in bash curl npm node ssh grep stat readlink python3; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
 
@@ -170,6 +170,45 @@ done
 info "PASS: dedicated private E2E runtime is reachable through loopback only."
 
 cd "$E2E_DIR"
+
+# The upstream attendance helper assumes a local server and can hold a stale
+# sold-out event page indefinitely during cleanup. Keep the committed upstream
+# test source untouched, but make the ephemeral runner copy re-load only while
+# neither valid attendance state is visible. Product assertions are unchanged.
+python3 - <<'PY'
+from pathlib import Path
+
+path = Path("utils.js")
+text = path.read_text()
+source = '''export const waitForAttendanceState = async (page) => {
+  await Promise.race([
+    getAttendButton(page).waitFor({ state: "visible" }),
+    getLeaveButton(page).waitFor({ state: "visible" }),
+  ]);
+};'''
+target = '''export const waitForAttendanceState = async (page) => {
+  for (let attempt = 1; attempt <= 8; attempt += 1) {
+    if ((await getAttendButton(page).isVisible()) || (await getLeaveButton(page).isVisible())) {
+      return;
+    }
+
+    if (attempt < 8) {
+      await page.waitForTimeout(2_000);
+      await page.reload({ waitUntil: "domcontentloaded" });
+    }
+  }
+
+  await Promise.race([
+    getAttendButton(page).waitFor({ state: "visible", timeout: 30_000 }),
+    getLeaveButton(page).waitFor({ state: "visible", timeout: 30_000 }),
+  ]);
+};'''
+if text.count(source) != 1:
+    raise SystemExit("expected exactly one upstream attendance-state helper")
+path.write_text(text.replace(source, target))
+PY
+grep -Fq 'for (let attempt = 1; attempt <= 8; attempt += 1)' utils.js
+
 npm ci --ignore-scripts
 
 case "$INSTALL_BROWSER" in
