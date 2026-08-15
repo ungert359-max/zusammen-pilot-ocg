@@ -19,6 +19,7 @@ LOCAL_PORT="${AACHEN_E2E_BROWSER_PORT:-9000}"
 REMOTE_PORT="${AACHEN_E2E_REMOTE_PORT:-19000}"
 KUBECONFIG_REMOTE="${AACHEN_E2E_REMOTE_KUBECONFIG:-/etc/rancher/k3s/k3s.yaml}"
 INSTALL_BROWSER="${AACHEN_E2E_INSTALL_BROWSER:-true}"
+TEST_TIMEOUT_MS="${AACHEN_E2E_TEST_TIMEOUT_MS:-120000}"
 
 fail() {
   printf 'ERROR: %s\n' "$*" >&2
@@ -74,8 +75,10 @@ esac
 
 [[ "$LOCAL_PORT" =~ ^[0-9]+$ ]] || fail "AACHEN_E2E_BROWSER_PORT must be numeric"
 [[ "$REMOTE_PORT" =~ ^[0-9]+$ ]] || fail "AACHEN_E2E_REMOTE_PORT must be numeric"
+[[ "$TEST_TIMEOUT_MS" =~ ^[0-9]+$ ]] || fail "AACHEN_E2E_TEST_TIMEOUT_MS must be numeric"
 (( LOCAL_PORT >= 1024 && LOCAL_PORT <= 65535 )) || fail "browser tunnel port is outside the unprivileged TCP range"
 (( REMOTE_PORT >= 1024 && REMOTE_PORT <= 65535 )) || fail "remote port-forward port is outside the unprivileged TCP range"
+(( TEST_TIMEOUT_MS >= 30000 && TEST_TIMEOUT_MS <= 600000 )) || fail "AACHEN_E2E_TEST_TIMEOUT_MS must be between 30000 and 600000 milliseconds"
 [[ "$LOCAL_PORT" == "9000" ]] || fail "current private pilot baseUrl is pinned to loopback port 9000; refusing a mismatched browser port"
 
 node_major="$(node -p 'Number(process.versions.node.split(".")[0])')"
@@ -188,6 +191,7 @@ run_product_check() {
   npx playwright test \
     --config playwright.config.js \
     --project=chromium-deep \
+    --timeout "$TEST_TIMEOUT_MS" \
     "$file" \
     --grep "$title"
 }
