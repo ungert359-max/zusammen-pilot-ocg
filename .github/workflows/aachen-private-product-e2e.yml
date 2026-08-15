@@ -185,23 +185,30 @@ jobs:
         run: |
           set -Eeuo pipefail
 
-          # The upstream test helpers use a 5s per-navigation budget tuned for a local
-          # server. This private gate crosses GitHub -> SSH -> kubectl port-forward,
-          # while the application binary itself remains untouched. Adjust only the
-          # ephemeral runner checkout so the same upstream product assertions can run
-          # over that deliberately slower transport.
+          # The upstream helpers are tuned for a local server. This private gate crosses
+          # GitHub -> SSH -> kubectl port-forward, while the deployed application binary
+          # remains untouched. Adjust only the ephemeral test-runner checkout.
           python3 - <<'PY'
           from pathlib import Path
 
-          path = Path("tests/e2e/utils.js")
-          text = path.read_text()
-          source = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;"
-          target = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;"
-          if text.count(source) != 1:
+          utils_path = Path("tests/e2e/utils.js")
+          utils_text = utils_path.read_text()
+          nav_source = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;"
+          nav_target = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;"
+          if utils_text.count(nav_source) != 1:
               raise SystemExit("expected exactly one upstream navigation timeout constant")
-          path.write_text(text.replace(source, target))
+          utils_path.write_text(utils_text.replace(nav_source, nav_target))
+
+          config_path = Path("tests/e2e/playwright.config.js")
+          config_text = config_path.read_text()
+          expect_source = '  expect: {\n    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },\n  },'
+          expect_target = '  expect: {\n    timeout: 30_000,\n    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },\n  },'
+          if config_text.count(expect_source) != 1:
+              raise SystemExit("expected exactly one upstream expect configuration block")
+          config_path.write_text(config_text.replace(expect_source, expect_target))
           PY
           grep -Fq 'const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;' tests/e2e/utils.js
+          grep -Fq '    timeout: 30_000,' tests/e2e/playwright.config.js
 
           AACHEN_E2E_SSH_HOST="$HETZNER_HOST" \
           AACHEN_E2E_SSH_USER="$HETZNER_USER" \
