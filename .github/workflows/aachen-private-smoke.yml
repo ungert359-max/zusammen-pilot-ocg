@@ -194,7 +194,59 @@ jobs:
             trap - RETURN
           fi
 
+          # Preserve the existing database password and badge key, but refresh
+          # this non-secret mail-disable block for private values files created
+          # by earlier smoke runs. The update is atomic and emits no file data.
+          python3 - "$private_values" <<'PY'
+          import pathlib
+          import re
+          import sys
+
+          path = pathlib.Path(sys.argv[1])
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          mail_block = """email:
+            # The inherited chart emits these fields unquoted. Quote tokens keep
+            # them typed as strings without adding any real SMTP credential.
+            fromAddress: '\"noreply@aachen.invalid\"'
+            fromName: '\"Aachen Pilot\"'
+            rcptsWhitelist: []
+            smtp:
+              host: '\"localhost\"'
+              username: '\"\"'
+              password: '\"\"'
+          """.splitlines(keepends=True)
+
+          def top_level_key(line):
+              stripped = line.rstrip("\r\n")
+              if not stripped or stripped[0].isspace():
+                  return None
+              match = re.fullmatch(r"([A-Za-z0-9_-]+):\s*(?:#.*)?", stripped)
+              return match.group(1) if match else None
+
+          email_starts = [i for i, line in enumerate(lines) if top_level_key(line) == "email"]
+          if len(email_starts) > 1:
+              raise SystemExit("private values contain multiple top-level email blocks")
+
+          if email_starts:
+              start = email_starts[0]
+              end = next((i for i in range(start + 1, len(lines)) if top_level_key(lines[i])), len(lines))
+              lines[start:end] = mail_block
+          else:
+              server_starts = [i for i, line in enumerate(lines) if top_level_key(line) == "server"]
+              if len(server_starts) != 1:
+                  raise SystemExit("private values must contain exactly one top-level server block")
+              lines[server_starts[0]:server_starts[0]] = mail_block
+
+          tmp = path.with_name(path.name + ".tmp")
+          tmp.write_text("".join(lines), encoding="utf-8")
+          tmp.chmod(0o600)
+          tmp.replace(path)
+          PY
+
           test "$(stat -c '%a' "$private_values")" = 600
+          test "$(grep -c '^email:$' "$private_values")" = 1
+          grep -Fq "fromAddress: '\"noreply@aachen.invalid\"'" "$private_values"
+          grep -Fq "rcptsWhitelist: []" "$private_values"
           cd "$source_dir"
           AACHEN_PRIVATE_VALUES_FILE="$private_values" \
           AACHEN_TIMEOUT=12m \
