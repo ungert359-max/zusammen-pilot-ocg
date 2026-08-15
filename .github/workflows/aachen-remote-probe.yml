@@ -56,6 +56,9 @@ jobs:
              if sudo -n true >/dev/null 2>&1; then
                echo "SUDO_NONINTERACTIVE=yes"
                sudo -n k3s secrets-encrypt status || true
+               echo "POSTGRES_IMAGE_CHECK_BEGIN"
+               sudo -n k3s ctr images list name==zusammen-pilot-postgres:local || true
+               echo "POSTGRES_IMAGE_CHECK_END"
                echo "SERVER_IMAGE_CHECK_BEGIN"
                sudo -n k3s ctr images list name==zusammen-pilot-server:local || true
                echo "SERVER_IMAGE_CHECK_END"
