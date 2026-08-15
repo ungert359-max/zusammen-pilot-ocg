@@ -26,6 +26,7 @@ jobs:
         run: |
           bash -n pilot/aachen/private-smoke-test.sh
           bash -n pilot/aachen/pin-runtime-images.sh
+          bash -n pilot/aachen/private-product-e2e-prepare.sh
 
       - name: Verify pilot database runtime base is immutable PostgreSQL 17
         shell: bash
