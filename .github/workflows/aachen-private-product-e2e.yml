@@ -1,0 +1,230 @@
+name: Aachen private product E2E
+
+on:
+  push:
+    branches:
+      - pilot-aachen-mvp
+    paths:
+      - .github/workflows/aachen-private-product-e2e.yml
+      - pilot/aachen/private-product-e2e-prepare.sh
+      - pilot/aachen/private-product-e2e-run.sh
+  workflow_dispatch:
+
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: aachen-private-product-e2e
+  cancel-in-progress: false
+
+jobs:
+  product-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 75
+    env:
+      HETZNER_HOST: 178.104.6.218
+      HETZNER_USER: deploy
+      PILOT_IMAGE_SHA: 696dfe8b100f15f2a5488d4841de5bfa344339be
+      PILOT_CONTROL_SHA: ${{ github.sha }}
+      POSTGRES_IMAGE_DIGEST: sha256:c6c4e196d49182e54c7951fa629f5bce71e7ff7f17610f6960251cfeefbea4eb
+      SERVER_IMAGE_DIGEST: sha256:c269e39c80f94a8defe53cf543aba367542faf94fe266abc53c18411fcfe71c5
+      MIGRATOR_IMAGE_DIGEST: sha256:b70a2505bd92b9ba74ee885a0026af8855595601a78c59c68d72c38458f0cbb7
+      AACHEN_E2E_NAMESPACE: ocg-aachen-e2e
+      AACHEN_E2E_RELEASE: aachen-e2e
+
+    steps:
+      - name: Checkout exact control commit
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Set up pinned Node.js runtime for upstream Playwright
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: '22'
+
+      - name: Wait for exact-head regression gates
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+
+          wait_for_gate() {
+            local workflow_id="$1"
+            local label="$2"
+            local response count status conclusion
+
+            for _ in $(seq 1 90); do
+              response="$(curl --fail --silent --show-error \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H 'Accept: application/vnd.github+json' \
+                -H 'X-GitHub-Api-Version: 2022-11-28' \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?branch=pilot-aachen-mvp&head_sha=${GITHUB_SHA}&per_page=1")"
+
+              read -r count status conclusion < <(
+                python3 -c '
+import json, sys
+payload = json.load(sys.stdin)
+runs = payload.get("workflow_runs", [])
+if not runs:
+    print(0, "missing", "none")
+else:
+    run = runs[0]
+    print(1, run.get("status", "unknown"), run.get("conclusion") or "none")
+' <<<"$response"
+              )
+
+              if [[ "$count" == 1 && "$status" == completed ]]; then
+                if [[ "$conclusion" == success ]]; then
+                  echo "PASS: $label succeeded for exact HEAD $GITHUB_SHA."
+                  return 0
+                fi
+                echo "FAIL: $label completed with conclusion '$conclusion' for exact HEAD $GITHUB_SHA." >&2
+                return 1
+              fi
+
+              sleep 15
+            done
+
+            echo "FAIL: timed out waiting for $label on exact HEAD $GITHUB_SHA." >&2
+            return 1
+          }
+
+          wait_for_gate 334455136 'Aachen upstream core integrity'
+          wait_for_gate 333909374 'Aachen pilot validation'
+
+      - name: Prepare pinned SSH connection
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Prepare isolated synthetic runtime on the private host
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env PILOT_IMAGE_SHA='$PILOT_IMAGE_SHA' PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' POSTGRES_IMAGE_DIGEST='$POSTGRES_IMAGE_DIGEST' SERVER_IMAGE_DIGEST='$SERVER_IMAGE_DIGEST' MIGRATOR_IMAGE_DIGEST='$MIGRATOR_IMAGE_DIGEST' AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' AACHEN_E2E_RELEASE='$AACHEN_E2E_RELEASE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          image_sha="${PILOT_IMAGE_SHA:?PILOT_IMAGE_SHA is required}"
+          control_sha="${PILOT_CONTROL_SHA:?PILOT_CONTROL_SHA is required}"
+          postgres_digest="${POSTGRES_IMAGE_DIGEST:?POSTGRES_IMAGE_DIGEST is required}"
+          server_digest="${SERVER_IMAGE_DIGEST:?SERVER_IMAGE_DIGEST is required}"
+          migrator_digest="${MIGRATOR_IMAGE_DIGEST:?MIGRATOR_IMAGE_DIGEST is required}"
+          namespace="${AACHEN_E2E_NAMESPACE:?AACHEN_E2E_NAMESPACE is required}"
+          release="${AACHEN_E2E_RELEASE:?AACHEN_E2E_RELEASE is required}"
+          base_dir=/opt/zusammen-pilot
+          source_dir="$base_dir/runtime-control/$control_sha"
+          private_values="$base_dir/private/aachen-private-values.yaml"
+
+          command -v git >/dev/null
+          command -v k3s >/dev/null
+          command -v kubectl >/dev/null
+          k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
+
+          if [[ ! -d "$source_dir/.git" ]]; then
+            mkdir -p "$(dirname "$source_dir")"
+            git clone --quiet --no-checkout https://github.com/ungert359-max/zusammen-pilot-ocg.git "$source_dir"
+          fi
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$image_sha"
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$control_sha"
+          git -C "$source_dir" checkout --quiet --detach "$control_sha"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$control_sha"
+
+          unexpected_changes="$(
+            git -C "$source_dir" diff --name-only "$image_sha" "$control_sha" -- | while IFS= read -r path; do
+              case "$path" in
+                .github/workflows/*) ;;
+                pilot/aachen/postgres-postgis/*) printf '%s\n' "$path" ;;
+                pilot/aachen/*) ;;
+                *) printf '%s\n' "$path" ;;
+              esac
+            done
+          )"
+          if [[ -n "$unexpected_changes" ]]; then
+            echo 'Application/image inputs changed since the imported image build; refusing private product E2E on stale images.' >&2
+            printf '%s\n' "$unexpected_changes" >&2
+            exit 1
+          fi
+
+          images_list="$(k3s ctr images list)"
+          awk -v name='zusammen-pilot-postgres:local' -v digest="$postgres_digest" \
+            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+          awk -v name='zusammen-pilot-server:local' -v digest="$server_digest" \
+            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+          awk -v name='zusammen-pilot-dbmigrator:local' -v digest="$migrator_digest" \
+            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+
+          test -f "$private_values"
+          case "$(stat -c '%a' "$private_values")" in
+            400|600) ;;
+            *) echo 'Private values permissions must be 400 or 600.' >&2; exit 1 ;;
+          esac
+
+          cd "$source_dir"
+          AACHEN_PRIVATE_VALUES_FILE="$private_values" \
+          AACHEN_E2E_NAMESPACE="$namespace" \
+          AACHEN_E2E_RELEASE="$release" \
+          AACHEN_E2E_TIMEOUT=12m \
+          bash pilot/aachen/private-product-e2e-prepare.sh prepare
+          REMOTE
+
+      - name: Run upstream product journey through loopback-only SSH
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          AACHEN_E2E_SSH_HOST="$HETZNER_HOST" \
+          AACHEN_E2E_SSH_USER="$HETZNER_USER" \
+          AACHEN_E2E_SSH_KEY_FILE="$HOME/.ssh/id_ed25519" \
+          AACHEN_E2E_KNOWN_HOSTS_FILE="$HOME/.ssh/known_hosts" \
+          AACHEN_E2E_NAMESPACE="$AACHEN_E2E_NAMESPACE" \
+          AACHEN_E2E_RELEASE="$AACHEN_E2E_RELEASE" \
+          AACHEN_E2E_INSTALL_BROWSER=true \
+          bash pilot/aachen/private-product-e2e-run.sh
+
+      - name: Remove dedicated synthetic E2E namespace
+        if: always()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          if [[ ! -f "$HOME/.ssh/id_ed25519" || ! -f "$HOME/.ssh/known_hosts" ]]; then
+            echo 'SSH material was not prepared; no remote E2E namespace could have been created.'
+            exit 0
+          fi
+
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' AACHEN_E2E_RELEASE='$AACHEN_E2E_RELEASE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          source_dir="/opt/zusammen-pilot/runtime-control/${PILOT_CONTROL_SHA:?PILOT_CONTROL_SHA is required}"
+          test -f "$source_dir/pilot/aachen/private-product-e2e-prepare.sh"
+          cd "$source_dir"
+          AACHEN_E2E_NAMESPACE="${AACHEN_E2E_NAMESPACE:?AACHEN_E2E_NAMESPACE is required}" \
+          AACHEN_E2E_RELEASE="${AACHEN_E2E_RELEASE:?AACHEN_E2E_RELEASE is required}" \
+          bash pilot/aachen/private-product-e2e-prepare.sh cleanup
+          REMOTE
