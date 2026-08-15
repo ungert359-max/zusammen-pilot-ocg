@@ -12,6 +12,10 @@ meetings:
   zoom:
     enabled: false
 
+# Deliberate pilot lockout: preserve the complete upstream ticketing/payment/refund
+# implementation, but do not activate paid ticketing in the initial Aachen pilot.
+# Changing this to true requires separate explicit approval and the dedicated
+# payment/ticketing validation gate documented in DEPLOYMENT-GATES.md.
 payments:
   enabled: false
 
