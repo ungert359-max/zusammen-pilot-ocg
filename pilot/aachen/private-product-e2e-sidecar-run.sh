@@ -83,9 +83,20 @@ if ! kubectl -n "$NAMESPACE" rollout status "$server_deployment" --timeout=10m >
   fail "Playwright sidecar rollout did not become ready"
 fi
 
-server_pod="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o name)"
+# A successful rolling deployment can briefly leave the old terminating server
+# pod visible alongside the new Ready pod. Select the unique pod whose immutable
+# pod spec actually contains the Playwright sidecar instead of treating that
+# normal replacement overlap as a product failure.
+server_pod=""
+while IFS= read -r candidate_pod; do
+  [[ -n "$candidate_pod" ]] || continue
+  container_names="$(kubectl -n "$NAMESPACE" get "$candidate_pod" -o jsonpath='{.spec.containers[*].name}')"
+  if grep -Eq "(^|[[:space:]])${RUNNER_CONTAINER}([[:space:]]|$)" <<<"$container_names"; then
+    [[ -z "$server_pod" ]] || fail "expected exactly one server pod containing the Playwright sidecar"
+    server_pod="$candidate_pod"
+  fi
+done < <(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o name)
 [[ -n "$server_pod" ]] || fail "server pod with sidecar was not created"
-[[ "$(printf '%s\n' "$server_pod" | wc -l)" -eq 1 ]] || fail "expected exactly one server pod after sidecar rollout"
 kubectl -n "$NAMESPACE" wait --for=condition=Ready "$server_pod" --timeout=8m >/dev/null
 
 resolved_runner_image="$(kubectl -n "$NAMESPACE" get "$server_pod" -o jsonpath="{.status.containerStatuses[?(@.name=='$RUNNER_CONTAINER')].imageID}")"
