@@ -52,17 +52,17 @@ spec:
         - name: $RUNNER_CONTAINER
           image: $PLAYWRIGHT_IMAGE
           imagePullPolicy: IfNotPresent
-          command: [\"/bin/bash\", \"-lc\", \"sleep 14400\"]
+          command: ["/bin/bash", "-lc", "sleep 14400"]
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
-              drop: [\"ALL\"]
+              drop: ["ALL"]
           resources:
             requests:
               cpu: 250m
               memory: 1Gi
             limits:
-              cpu: \"2\"
+              cpu: "2"
               memory: 3Gi
           volumeMounts:
             - name: aachen-e2e-dshm
