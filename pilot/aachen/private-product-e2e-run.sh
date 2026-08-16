@@ -174,7 +174,9 @@ cd "$E2E_DIR"
 # The upstream attendance helper assumes a local server and can hold a stale
 # sold-out event page indefinitely during cleanup. Keep the committed upstream
 # test source untouched, but make the ephemeral runner copy re-load only while
-# neither valid attendance state is visible. Product assertions are unchanged.
+# neither valid attendance state is visible. If that still fails, record only
+# sanitized state/counter diagnostics from the synthetic page and JSON APIs;
+# never print cookies, headers, response bodies, user data, or private values.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -198,6 +200,75 @@ target = '''export const waitForAttendanceState = async (page) => {
     }
   }
 
+  const diagnostic = await page.evaluate(async () => {
+    const container = document.querySelector("[data-attendance-container]");
+    const checker = container?.querySelector('[data-attendance-role="attendance-checker"]');
+    const visible = (role) => {
+      const element = container?.querySelector(`[data-attendance-role="${role}"]`);
+      return element instanceof HTMLElement && !element.classList.contains("hidden");
+    };
+    const result = {
+      path: window.location.pathname,
+      controls: {
+        loading: visible("loading-btn"),
+        signin: visible("signin-btn"),
+        attend: visible("attend-btn"),
+        leave: visible("leave-btn"),
+      },
+      availability: {
+        hydrated: container?.dataset?.availabilityHydrated || "missing",
+        remainingCapacity: container?.dataset?.remainingCapacity || "missing",
+        waitlistEnabled: container?.dataset?.waitlistEnabled || "missing",
+        simpleRsvp: container?.dataset?.isSimpleRsvp || "missing",
+        hasVisibleTicketTypes: container?.dataset?.hasVisibleTicketTypes || "missing",
+      },
+      availabilityApi: { httpStatus: null, remainingCapacity: null, waitlistCount: null },
+      enrollmentApi: { httpStatus: null, state: null },
+    };
+
+    const availabilityUrl = container?.dataset?.availabilityUrl;
+    if (availabilityUrl) {
+      try {
+        const response = await fetch(availabilityUrl, {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(5_000),
+        });
+        result.availabilityApi.httpStatus = response.status;
+        if (response.ok) {
+          const payload = await response.json();
+          result.availabilityApi.remainingCapacity = payload?.remaining_capacity ?? null;
+          result.availabilityApi.waitlistCount = payload?.waitlist_count ?? null;
+        }
+      } catch {
+        result.availabilityApi.httpStatus = "fetch-error";
+      }
+    }
+
+    const enrollmentUrl = checker?.getAttribute("hx-get");
+    if (enrollmentUrl) {
+      try {
+        const response = await fetch(enrollmentUrl, {
+          cache: "no-store",
+          credentials: "same-origin",
+          headers: { Accept: "application/json" },
+          signal: AbortSignal.timeout(5_000),
+        });
+        result.enrollmentApi.httpStatus = response.status;
+        if (response.ok) {
+          const payload = await response.json();
+          result.enrollmentApi.state = typeof payload?.status === "string" ? payload.status : "missing";
+        }
+      } catch {
+        result.enrollmentApi.httpStatus = "fetch-error";
+      }
+    }
+
+    return result;
+  });
+  console.error(`ATTENDANCE_STATE_DIAGNOSTIC ${JSON.stringify(diagnostic)}`);
+
   await Promise.race([
     getAttendButton(page).waitFor({ state: "visible", timeout: 30_000 }),
     getLeaveButton(page).waitFor({ state: "visible", timeout: 30_000 }),
@@ -207,7 +278,7 @@ if text.count(source) != 1:
     raise SystemExit("expected exactly one upstream attendance-state helper")
 path.write_text(text.replace(source, target))
 PY
-grep -Fq 'for (let attempt = 1; attempt <= 8; attempt += 1)' utils.js
+grep -Fq 'ATTENDANCE_STATE_DIAGNOSTIC' utils.js
 
 npm ci --ignore-scripts
 
