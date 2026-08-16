@@ -176,7 +176,7 @@ cd "$E2E_DIR"
 # test source untouched, but make the ephemeral runner copy re-load only while
 # neither valid attendance state is visible. If that still fails, record only
 # sanitized state/counter diagnostics from the synthetic page and JSON APIs;
-# never print cookies, headers, response bodies, user data, or private values.
+# never print cookies, arbitrary headers, response bodies, user data, or private values.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -222,6 +222,14 @@ target = '''export const waitForAttendanceState = async (page) => {
         simpleRsvp: container?.dataset?.isSimpleRsvp || "missing",
         hasVisibleTicketTypes: container?.dataset?.hasVisibleTicketTypes || "missing",
       },
+      deployment: {
+        loadedCommitSha:
+          document.querySelector('meta[name="ocg-commit-sha"]')?.getAttribute("content")?.trim() || "missing",
+        availabilityCommitSha: null,
+        availabilityRefreshRequested: null,
+        enrollmentCommitSha: null,
+        enrollmentRefreshRequested: null,
+      },
       availabilityApi: { httpStatus: null, remainingCapacity: null, waitlistCount: null },
       enrollmentApi: { httpStatus: null, state: null },
     };
@@ -236,6 +244,8 @@ target = '''export const waitForAttendanceState = async (page) => {
           signal: AbortSignal.timeout(5_000),
         });
         result.availabilityApi.httpStatus = response.status;
+        result.deployment.availabilityCommitSha = response.headers.get("X-OCG-Commit-SHA") || "missing";
+        result.deployment.availabilityRefreshRequested = response.headers.get("X-OCG-Refresh") || "missing";
         if (response.ok) {
           const payload = await response.json();
           result.availabilityApi.remainingCapacity = payload?.remaining_capacity ?? null;
@@ -256,6 +266,8 @@ target = '''export const waitForAttendanceState = async (page) => {
           signal: AbortSignal.timeout(5_000),
         });
         result.enrollmentApi.httpStatus = response.status;
+        result.deployment.enrollmentCommitSha = response.headers.get("X-OCG-Commit-SHA") || "missing";
+        result.deployment.enrollmentRefreshRequested = response.headers.get("X-OCG-Refresh") || "missing";
         if (response.ok) {
           const payload = await response.json();
           result.enrollmentApi.state = typeof payload?.status === "string" ? payload.status : "missing";
