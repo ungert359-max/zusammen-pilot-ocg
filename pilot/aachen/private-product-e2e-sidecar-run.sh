@@ -314,7 +314,8 @@ const memberReplacement = [
   "    \"alpha-waitlist-lab\",",
   "  );",
   "  await waitForAttendanceState(memberPage);",
-  "  await expect(getAttendButton(memberPage)).toContainText(\"Attend event\");",
+  "  await expect(getAttendButton(memberPage)).toBeVisible();",
+  "  await expect(getLeaveButton(memberPage)).toBeHidden();",
 ].join("\n");
 source = source.slice(0, memberStartIndex) + memberReplacement + source.slice(memberEndIndex + "\n  }".length);
 
@@ -344,8 +345,9 @@ const organizerReplacement = [
 source = source.slice(0, organizerStartIndex) + organizerReplacement + source.slice(organizerEndIndex + "\n  }".length);
 
 if ((source.split("const waitForCleanupActionResponse =").length - 1) !== 1) process.exit(15);
-if ((source.split("await expect(getAttendButton(memberPage)).toContainText(\"Attend event\");").length - 1) !== 1) process.exit(16);
-if ((source.split("await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");").length - 1) !== 1) process.exit(17);
+if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 1) process.exit(16);
+if ((source.split("await expect(getLeaveButton(memberPage)).toBeHidden();").length - 1) !== 1) process.exit(17);
+if ((source.split("await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");").length - 1) !== 1) process.exit(18);
 fs.writeFileSync(path, source);
 '
 info "PASS: pilot-only idempotent waitlist cleanup verification applied to temporary sidecar helper copy."
