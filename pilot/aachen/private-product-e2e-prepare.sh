@@ -175,6 +175,22 @@ kubectl -n "$NAMESPACE" exec "$postgres_pod" -- \
   -c 'update "user" set password = $$$argon2id$v=19$m=19456,t=2,p=1$q55jlxUx8bffhFM3xN36ZA$te6OiWkZ/q35lpSEAZbd/A3iJyCByxbive9F61sTp7g$$ where username like $$e2e-%$$' \
   >/dev/null
 
+# Upstream E2E loads its synthetic fixtures before starting the application.
+# The private pilot smoke path necessarily starts the server first, so restart
+# only the isolated E2E server after all fixture writes. This preserves the
+# upstream startup ordering without changing application code or test assertions.
+server_deployment="$(
+  kubectl -n "$NAMESPACE" get deployment \
+    -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" \
+    -o name
+)"
+[[ -n "$server_deployment" ]] || fail "isolated server deployment was not created"
+[[ "$(printf '%s\n' "$server_deployment" | wc -l)" -eq 1 ]] || fail "expected exactly one isolated server deployment"
+
+info "Restarting isolated E2E server after fixture load to match upstream startup ordering..."
+kubectl -n "$NAMESPACE" rollout restart "$server_deployment" >/dev/null
+kubectl -n "$NAMESPACE" rollout status "$server_deployment" --timeout="$TIMEOUT" >/dev/null
+
 synthetic_user_count="$(
   kubectl -n "$NAMESPACE" exec "$postgres_pod" -- \
     env PGPASSWORD="$db_password" \
