@@ -17,7 +17,7 @@ PLAYWRIGHT_IMAGE="${AACHEN_E2E_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright@sh
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-for command_name in bash kubectl grep find sort xargs sha256sum; do
+for command_name in bash kubectl k3s grep find sort xargs sha256sum; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
 
@@ -31,6 +31,14 @@ case "$RUN_FULL_SUITE" in true|false) ;; *) fail "AACHEN_E2E_RUN_FULL_SUITE must
 server_deployment="$(kubectl -n "$NAMESPACE" get deployment -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o name)"
 [[ -n "$server_deployment" ]] || fail "private E2E server deployment was not found"
 [[ "$(printf '%s\n' "$server_deployment" | wc -l)" -eq 1 ]] || fail "expected exactly one private E2E server deployment"
+
+# Pull the large browser image before changing the already-healthy deployment.
+# The previous two attempts spent the entire deployment progress window after
+# adding this sidecar. Pre-pulling keeps the product runtime unchanged until the
+# digest-pinned test image is definitely available on the single private node.
+info "Pre-pulling digest-pinned Playwright sidecar image before deployment change..."
+k3s ctr images pull "$PLAYWRIGHT_IMAGE" >/dev/null
+info "PASS: digest-pinned Playwright sidecar image is present in private k3s."
 
 # The prior cluster-local runner still inserted a TCP proxy/service hop. Logs
 # proved the unchanged upstream helper's explicit 5s page.goto budget was then
@@ -69,7 +77,12 @@ spec:
               mountPath: /dev/shm
 EOF
 )" >/dev/null
-kubectl -n "$NAMESPACE" rollout status "$server_deployment" --timeout=10m >/dev/null
+if ! kubectl -n "$NAMESPACE" rollout status "$server_deployment" --timeout=10m >/dev/null; then
+  info "Sidecar rollout failed; collecting non-secret pod status and events."
+  kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o wide >&2 || true
+  kubectl -n "$NAMESPACE" get events --sort-by=.lastTimestamp --field-selector involvedObject.kind=Pod 2>/dev/null | tail -n 40 >&2 || true
+  fail "Playwright sidecar rollout did not become ready"
+fi
 
 server_pod="$(kubectl -n "$NAMESPACE" get pods -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o name)"
 [[ -n "$server_pod" ]] || fail "server pod with sidecar was not created"
