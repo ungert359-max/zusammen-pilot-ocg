@@ -220,12 +220,11 @@ fs.writeFileSync(path, updated);
 '
 info "PASS: pilot-only event-table refresh synchronization applied to temporary sidecar helper copy."
 
-# The waitlist product journey itself passed through promotion, claim and cancel
-# on the last exact-head run, but the upstream afterEach cleanup then spent its
-# entire test budget waiting for an attendance control after a fresh event
-# navigation. Bound that helper wait and retry the same page with at most two
-# reloads. This keeps the original attend/leave condition intact, avoids masking
-# a persistent product failure, and only changes the temporary sidecar copy.
+# Two exact-head runs reached waitlist teardown but showed that a stale public
+# attendance control can survive a successful state transition. Make the
+# temporary helper wait for either valid control (not whichever timeout settles
+# first), then let teardown re-check the authoritative final UI state after each
+# idempotent cleanup action. Product assertions/specs remain unchanged.
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
 const fs = require("node:fs");
 const path = "/work/e2e/utils.js";
@@ -238,16 +237,10 @@ const from = `export const waitForAttendanceState = async (page) => {
 };`;
 const to = `export const waitForAttendanceState = async (page) => {
   for (let attempt = 0; attempt < 3; attempt += 1) {
-    const attendanceVisible = await Promise.race([
-      getAttendButton(page)
-        .waitFor({ state: "visible", timeout: 10_000 })
-        .then(() => true)
-        .catch(() => false),
-      getLeaveButton(page)
-        .waitFor({ state: "visible", timeout: 10_000 })
-        .then(() => true)
-        .catch(() => false),
-    ]);
+    const attendanceVisible = await Promise.any([
+      getAttendButton(page).waitFor({ state: "visible", timeout: 10_000 }).then(() => true),
+      getLeaveButton(page).waitFor({ state: "visible", timeout: 10_000 }).then(() => true),
+    ]).catch(() => false);
 
     if (attendanceVisible) {
       return;
@@ -263,9 +256,97 @@ const to = `export const waitForAttendanceState = async (page) => {
 if ((source.split(from).length - 1) !== 1) process.exit(10);
 fs.writeFileSync(path, source.replace(from, to));
 const updated = fs.readFileSync(path, "utf8");
-if ((updated.split("attendance controls did not converge after bounded refresh retries").length - 1) !== 1 || updated.includes(from)) process.exit(11);
+if ((updated.split("const attendanceVisible = await Promise.any([").length - 1) !== 1 || updated.includes(from)) process.exit(11);
 '
 info "PASS: pilot-only bounded attendance-state refresh tolerance applied to temporary sidecar helper copy."
+
+# The waitlist test body itself has now repeatedly reached afterEach. Keep its
+# original assertions untouched, but make the shared seeded-state restoration
+# idempotent: an uncaptured cleanup response is acceptable only when a fresh
+# event navigation proves the desired final attendance control. Otherwise the
+# cleanup still fails closed. This avoids treating already-applied cleanup as a
+# product failure while preserving deterministic beforeEach state.
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
+const fs = require("node:fs");
+const path = "/work/e2e/utils.js";
+let source = fs.readFileSync(path, "utf8");
+const anchor = "  await clearSeededWaitlistOffer(memberPage);\n";
+const helper = `
+  const waitForCleanupActionResponse = async (page, action, { method, urlIncludes }) => {
+    const responsePromise = page
+      .waitForResponse(
+        (candidate) =>
+          candidate.request().method() === method && candidate.url().includes(urlIncludes) && candidate.ok(),
+        { timeout: 8_000 },
+      )
+      .catch(() => null);
+    await action();
+    const response = await responsePromise;
+    if (response) {
+      await response.finished();
+    }
+  };
+`;
+if ((source.split(anchor).length - 1) !== 1) process.exit(12);
+source = source.replace(anchor, anchor + helper);
+
+const memberStart = "  if (await getLeaveButton(memberPage).isVisible()) {";
+const memberEnd = "\n  }\n\n  // Restore organizer attendance so the one-seat event is full again.";
+const memberStartIndex = source.indexOf(memberStart);
+const memberEndIndex = source.indexOf(memberEnd, memberStartIndex);
+if (memberStartIndex < 0 || memberEndIndex < 0) process.exit(13);
+const memberReplacement = [
+  "  if (await getLeaveButton(memberPage).isVisible()) {",
+  "    await getLeaveButton(memberPage).click();",
+  "    await expect(memberPage.getByRole(\"button\", { name: \"Yes\" })).toBeVisible();",
+  "    await waitForCleanupActionResponse(memberPage, () => memberPage.getByRole(\"button\", { name: \"Yes\" }).click(), {",
+  "      method: \"DELETE\",",
+  "      urlIncludes: `/event/${TEST_EVENT_IDS.alpha.waitlistLab}/leave`,",
+  "    });",
+  "  }",
+  "",
+  "  await navigateToEvent(",
+  "    memberPage,",
+  "    TEST_COMMUNITY_NAME,",
+  "    TEST_GROUP_SLUGS.community1.alpha,",
+  "    \"alpha-waitlist-lab\",",
+  "  );",
+  "  await waitForAttendanceState(memberPage);",
+  "  await expect(getAttendButton(memberPage)).toContainText(\"Attend event\");",
+].join("\n");
+source = source.slice(0, memberStartIndex) + memberReplacement + source.slice(memberEndIndex + "\n  }".length);
+
+const organizerStart = "  if (await getAttendButton(organizerPage).isVisible()) {";
+const organizerEnd = "\n  }\n};";
+const organizerStartIndex = source.indexOf(organizerStart);
+const organizerEndIndex = source.indexOf(organizerEnd, organizerStartIndex);
+if (organizerStartIndex < 0 || organizerEndIndex < 0) process.exit(14);
+const organizerReplacement = [
+  "  if (await getAttendButton(organizerPage).isVisible()) {",
+  "    await expect(getAttendButton(organizerPage)).toContainText(\"Attend event\");",
+  "    await waitForCleanupActionResponse(organizerPage, () => getAttendButton(organizerPage).click(), {",
+  "      method: \"POST\",",
+  "      urlIncludes: `/event/${TEST_EVENT_IDS.alpha.waitlistLab}/attend`,",
+  "    });",
+  "  }",
+  "",
+  "  await navigateToEvent(",
+  "    organizerPage,",
+  "    TEST_COMMUNITY_NAME,",
+  "    TEST_GROUP_SLUGS.community1.alpha,",
+  "    \"alpha-waitlist-lab\",",
+  "  );",
+  "  await waitForAttendanceState(organizerPage);",
+  "  await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");",
+].join("\n");
+source = source.slice(0, organizerStartIndex) + organizerReplacement + source.slice(organizerEndIndex + "\n  }".length);
+
+if ((source.split("const waitForCleanupActionResponse =").length - 1) !== 1) process.exit(15);
+if ((source.split("await expect(getAttendButton(memberPage)).toContainText(\"Attend event\");").length - 1) !== 1) process.exit(16);
+if ((source.split("await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");").length - 1) !== 1) process.exit(17);
+fs.writeFileSync(path, source);
+'
+info "PASS: pilot-only idempotent waitlist cleanup verification applied to temporary sidecar helper copy."
 
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- bash -lc 'cd /work/e2e && npm ci --ignore-scripts'
 
