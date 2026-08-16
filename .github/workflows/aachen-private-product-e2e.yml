@@ -9,6 +9,7 @@ on:
       - pilot/aachen/private-product-e2e-prepare.sh
       - pilot/aachen/private-product-e2e-run.sh
       - pilot/aachen/private-product-e2e-cluster-run.sh
+      - pilot/aachen/private-product-e2e-sidecar-run.sh
   workflow_dispatch:
 
 permissions:
