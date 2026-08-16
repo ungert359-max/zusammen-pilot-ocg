@@ -287,6 +287,7 @@ const helper = `
     if (response) {
       await response.finished();
     }
+    return Boolean(response);
   };
 `;
 if ((source.split(anchor).length - 1) !== 1) process.exit(12);
@@ -325,29 +326,35 @@ const organizerStartIndex = source.indexOf(organizerStart);
 const organizerEndIndex = source.indexOf(organizerEnd, organizerStartIndex);
 if (organizerStartIndex < 0 || organizerEndIndex < 0) process.exit(14);
 const organizerReplacement = [
+  "  let organizerResponseObserved = true;",
   "  if (await getAttendButton(organizerPage).isVisible()) {",
   "    await expect(getAttendButton(organizerPage)).toContainText(\"Attend event\");",
-  "    await waitForCleanupActionResponse(organizerPage, () => getAttendButton(organizerPage).click(), {",
+  "    organizerResponseObserved = await waitForCleanupActionResponse(organizerPage, () => getAttendButton(organizerPage).click(), {",
   "      method: \"POST\",",
   "      urlIncludes: `/event/${TEST_EVENT_IDS.alpha.waitlistLab}/attend`,",
   "    });",
   "  }",
   "",
-  "  await navigateToEvent(",
-  "    organizerPage,",
-  "    TEST_COMMUNITY_NAME,",
-  "    TEST_GROUP_SLUGS.community1.alpha,",
-  "    \"alpha-waitlist-lab\",",
-  "  );",
-  "  await waitForAttendanceState(organizerPage);",
+  "  if (!organizerResponseObserved) {",
+  "    console.error(\"E2E cleanup: organizer attend response was not observed; verifying after fresh navigation\");",
+  "    await navigateToEvent(",
+  "      organizerPage,",
+  "      TEST_COMMUNITY_NAME,",
+  "      TEST_GROUP_SLUGS.community1.alpha,",
+  "      \"alpha-waitlist-lab\",",
+  "    );",
+  "    await waitForAttendanceState(organizerPage);",
+  "  }",
   "  await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");",
 ].join("\n");
 source = source.slice(0, organizerStartIndex) + organizerReplacement + source.slice(organizerEndIndex + "\n  }".length);
 
 if ((source.split("const waitForCleanupActionResponse =").length - 1) !== 1) process.exit(15);
-if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 1) process.exit(16);
-if ((source.split("await expect(getLeaveButton(memberPage)).toBeHidden();").length - 1) !== 1) process.exit(17);
-if ((source.split("await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");").length - 1) !== 1) process.exit(18);
+if ((source.split("return Boolean(response);").length - 1) !== 1) process.exit(16);
+if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 1) process.exit(17);
+if ((source.split("await expect(getLeaveButton(memberPage)).toBeHidden();").length - 1) !== 1) process.exit(18);
+if ((source.split("let organizerResponseObserved = true;").length - 1) !== 1) process.exit(19);
+if ((source.split("await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");").length - 1) !== 1) process.exit(20);
 fs.writeFileSync(path, source);
 '
 info "PASS: pilot-only idempotent waitlist cleanup verification applied to temporary sidecar helper copy."
