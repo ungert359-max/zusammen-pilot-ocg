@@ -8,6 +8,7 @@ on:
       - .github/workflows/aachen-private-product-e2e.yml
       - pilot/aachen/private-product-e2e-prepare.sh
       - pilot/aachen/private-product-e2e-run.sh
+      - pilot/aachen/private-product-e2e-cluster-run.sh
   workflow_dispatch:
 
 permissions:
@@ -21,7 +22,7 @@ concurrency:
 jobs:
   product-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    timeout-minutes: 240
     env:
       HETZNER_HOST: 178.104.6.218
       HETZNER_USER: deploy
@@ -36,11 +37,6 @@ jobs:
     steps:
       - name: Checkout exact control commit
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
-
-      - name: Set up pinned Node.js runtime for upstream Playwright
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
-        with:
-          node-version: '22'
 
       - name: Wait for exact-head regression gates
         shell: bash
@@ -180,45 +176,30 @@ jobs:
           bash pilot/aachen/private-product-e2e-prepare.sh prepare
           REMOTE
 
-      - name: Run upstream product journey through loopback-only SSH
+      - name: Run unchanged upstream product suite inside private cluster
         shell: bash
         run: |
           set -Eeuo pipefail
-
-          # The upstream helpers are tuned for a local server. This private gate crosses
-          # GitHub -> SSH -> kubectl port-forward, while the deployed application binary
-          # remains untouched. Adjust only the ephemeral test-runner checkout.
-          python3 - <<'PY'
-          from pathlib import Path
-
-          utils_path = Path("tests/e2e/utils.js")
-          utils_text = utils_path.read_text()
-          nav_source = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;"
-          nav_target = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;"
-          if utils_text.count(nav_source) != 1:
-              raise SystemExit("expected exactly one upstream navigation timeout constant")
-          utils_path.write_text(utils_text.replace(nav_source, nav_target))
-
-          config_path = Path("tests/e2e/playwright.config.js")
-          config_text = config_path.read_text()
-          expect_source = '  expect: {\n    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },\n  },'
-          expect_target = '  expect: {\n    timeout: 30_000,\n    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },\n  },'
-          if config_text.count(expect_source) != 1:
-              raise SystemExit("expected exactly one upstream expect configuration block")
-          config_path.write_text(config_text.replace(expect_source, expect_target))
-          PY
-          grep -Fq 'const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;' tests/e2e/utils.js
-          grep -Fq '    timeout: 30_000,' tests/e2e/playwright.config.js
-
-          AACHEN_E2E_SSH_HOST="$HETZNER_HOST" \
-          AACHEN_E2E_SSH_USER="$HETZNER_USER" \
-          AACHEN_E2E_SSH_KEY_FILE="$HOME/.ssh/id_ed25519" \
-          AACHEN_E2E_KNOWN_HOSTS_FILE="$HOME/.ssh/known_hosts" \
-          AACHEN_E2E_NAMESPACE="$AACHEN_E2E_NAMESPACE" \
-          AACHEN_E2E_RELEASE="$AACHEN_E2E_RELEASE" \
-          AACHEN_E2E_INSTALL_BROWSER=true \
-          AACHEN_E2E_TEST_TIMEOUT_MS=300000 \
-          bash pilot/aachen/private-product-e2e-run.sh
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=20 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' AACHEN_E2E_RELEASE='$AACHEN_E2E_RELEASE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          source_dir="/opt/zusammen-pilot/runtime-control/${PILOT_CONTROL_SHA:?PILOT_CONTROL_SHA is required}"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$PILOT_CONTROL_SHA"
+          test -f "$source_dir/pilot/aachen/private-product-e2e-cluster-run.sh"
+          cd "$source_dir"
+          AACHEN_E2E_NAMESPACE="${AACHEN_E2E_NAMESPACE:?AACHEN_E2E_NAMESPACE is required}" \
+          AACHEN_E2E_RELEASE="${AACHEN_E2E_RELEASE:?AACHEN_E2E_RELEASE is required}" \
+          AACHEN_E2E_RUN_FULL_SUITE=true \
+          bash pilot/aachen/private-product-e2e-cluster-run.sh
+          REMOTE
 
       - name: Remove dedicated synthetic E2E namespace
         if: always()
