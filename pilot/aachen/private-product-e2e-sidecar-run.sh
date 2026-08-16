@@ -141,6 +141,31 @@ if ((updated.split(to).length - 1) !== 1 || updated.includes(from)) process.exit
 '
 info "PASS: pilot-only 30s navigation-attempt tolerance applied to temporary sidecar helper copy."
 
+# The exact-head run proved the DELETE request itself succeeds, while the
+# unchanged row-removal assertion can still observe the pre-swap DOM for the
+# upstream default 5s expect window on this constrained private node. Keep every
+# assertion and spec byte-for-byte unchanged and only extend the temporary
+# Playwright harness polling window so HTMX has time to converge after the
+# already-successful response. Fail closed unless the expected config block is
+# present exactly once.
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
+const fs = require("node:fs");
+const path = "/work/e2e/playwright.config.js";
+const source = fs.readFileSync(path, "utf8");
+const from = `  expect: {
+    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },
+  },`;
+const to = `  expect: {
+    timeout: 30_000,
+    toHaveScreenshot: { maxDiffPixelRatio: 0.03 },
+  },`;
+if ((source.split(from).length - 1) !== 1) process.exit(8);
+fs.writeFileSync(path, source.replace(from, to));
+const updated = fs.readFileSync(path, "utf8");
+if ((updated.split("timeout: 30_000,").length - 1) !== 1 || updated.includes(from)) process.exit(9);
+'
+info "PASS: pilot-only 30s expect polling tolerance applied to temporary Playwright config."
+
 # Event creation returns 201 with HX-Trigger and HTMX then performs a separate
 # GET /dashboard/group/events before swapping the refreshed event table. The
 # upstream helper waits only for the POST response, so the product assertion can
