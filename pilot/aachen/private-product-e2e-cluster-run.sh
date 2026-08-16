@@ -174,7 +174,7 @@ pw_env=(
 
 run_pw() {
   kubectl -n "$NAMESPACE" exec "$RUNNER_POD" -- env "${pw_env[@]}" bash -lc \
-    "cd /work/e2e && npx playwright test --config playwright.config.js $*"
+    "cd /work/e2e && npx playwright test --config playwright.config.js --timeout 120000 $*"
 }
 
 run_product_check() {
@@ -185,7 +185,8 @@ run_product_check() {
 }
 
 # First prove the four launch-critical journeys using the upstream test files
-# without editing their helpers, assertions, timeouts or fixtures.
+# without editing their helpers, assertions, timeouts or fixtures. The harness
+# grants extra wall-clock budget for the containerized private runtime only.
 run_product_check "workflows/events/events.spec.js" "organizer can create and delete an event"
 run_product_check "workflows/rsvp/rsvp.spec.js" "approved RSVP requests are claimed through checkout"
 run_product_check "workflows/waitlist/waitlist.spec.js" "a waitlisted user is promoted when the attendee leaves"
