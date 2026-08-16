@@ -50,7 +50,6 @@ kubectl -n "$NAMESPACE" patch "$server_deployment" --type=strategic -p "$(cat <<
 spec:
   template:
     spec:
-      automountServiceAccountToken: false
       volumes:
         - name: aachen-e2e-dshm
           emptyDir:
