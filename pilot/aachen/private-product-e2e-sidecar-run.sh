@@ -145,8 +145,9 @@ info "PASS: pilot-only 30s navigation-attempt tolerance applied to temporary sid
 # GET /dashboard/group/events before swapping the refreshed event table. The
 # upstream helper waits only for the POST response, so the product assertion can
 # race that intended follow-up refresh on the private runtime. Patch only the
-# temporary helper copy to await that exact successful GET and attached list
-# marker; keep the event spec and its row assertion unchanged.
+# temporary helper copy to await that exact successful GET; once its body has
+# finished, the unchanged event-row assertion remains responsible for waiting
+# for and proving the actual DOM update.
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
 const fs = require("node:fs");
 const path = "/work/e2e/utils.js";
@@ -178,9 +179,6 @@ const toEnd = `
   if (groupEventsRefresh) {
     const refreshResponse = await groupEventsRefresh;
     await refreshResponse.finished();
-    await page.locator("#dashboard-content [data-events-list-page]").waitFor({
-      state: "attached",
-    });
   }
 
   return response;
