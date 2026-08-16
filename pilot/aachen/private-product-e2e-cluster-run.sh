@@ -69,7 +69,7 @@ BEGIN { return_count = 0; inserted = 0 }
     if (return_count == 2) {
       print "  if ("
       print "    method === \"DELETE\" &&"
-      print "    urlIncludes === `/event/${TEST_OPEN_CHECK_IN_EVENT.id}/leave`"
+      print "    urlIncludes === \\`/event/\\${TEST_OPEN_CHECK_IN_EVENT.id}/leave\\`"
       print "  ) {"
       print "    await response.finished();"
       print "    await page.reload({ waitUntil: \"domcontentloaded\" });"
@@ -89,7 +89,7 @@ END {
 ' "$tmp_script" > "$tmp_next"
 mv "$tmp_next" "$tmp_script"
 
-[[ "$(grep -Fc 'urlIncludes === `/event/${TEST_OPEN_CHECK_IN_EVENT.id}/leave`' "$tmp_script")" -eq 1 ]] || exit 1
+[[ "$(grep -Fc 'urlIncludes === \`/event/\${TEST_OPEN_CHECK_IN_EVENT.id}/leave\`' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc 'await page.reload({ waitUntil: "domcontentloaded" });' "$tmp_script")" -ge 1 ]] || exit 1
 
 bash "$tmp_script"
