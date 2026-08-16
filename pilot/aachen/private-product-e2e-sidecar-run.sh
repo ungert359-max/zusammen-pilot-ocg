@@ -5,8 +5,8 @@ set -Eeuo pipefail
 # to the exact private E2E server container. Both containers share the pod
 # network namespace, so browser traffic reaches the unchanged OCG server over
 # 127.0.0.1:9000. The checked-out upstream test tree is verified byte-for-byte
-# before a temporary sidecar-only navigation-attempt tolerance is applied; OCG
-# source, product assertions, specs, and fixtures remain unchanged.
+# before pilot-only helper tolerances for private transport synchronization are
+# applied; OCG source, product assertions, specs, and fixtures remain unchanged.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 E2E_DIR="$REPO_ROOT/tests/e2e"
@@ -141,6 +141,62 @@ if ((updated.split(to).length - 1) !== 1 || updated.includes(from)) process.exit
 '
 info "PASS: pilot-only 30s navigation-attempt tolerance applied to temporary sidecar helper copy."
 
+# Event creation returns 201 with HX-Trigger and HTMX then performs a separate
+# GET /dashboard/group/events before swapping the refreshed event table. The
+# upstream helper waits only for the POST response, so the product assertion can
+# race that intended follow-up refresh on the private runtime. Patch only the
+# temporary helper copy to await that exact successful GET and attached list
+# marker; keep the event spec and its row assertion unchanged.
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
+const fs = require("node:fs");
+const path = "/work/e2e/utils.js";
+const source = fs.readFileSync(path, "utf8");
+const fromStart = `export const waitForActionResponse = async (page, action, { method, urlIncludes, urlEndsWith, status }) => {
+  const [response] = await Promise.all([`;
+const toStart = `export const waitForActionResponse = async (page, action, { method, urlIncludes, urlEndsWith, status }) => {
+  const waitsForGroupEventsRefresh =
+    method === "POST" && urlIncludes === "/dashboard/group/events/add";
+  const groupEventsRefresh = waitsForGroupEventsRefresh
+    ? page.waitForResponse(
+        (candidate) =>
+          candidate.request().method() === "GET" &&
+          new URL(candidate.url()).pathname === "/dashboard/group/events" &&
+          candidate.ok(),
+      )
+    : null;
+
+  const [response] = await Promise.all([`;
+const fromEnd = `
+
+  return response;
+};
+
+/**
+ * Declines a pending offer for the shared waitlist lab event.`;
+const toEnd = `
+
+  if (groupEventsRefresh) {
+    const refreshResponse = await groupEventsRefresh;
+    await refreshResponse.finished();
+    await page.locator("#dashboard-content [data-events-list-page]").waitFor({
+      state: "attached",
+    });
+  }
+
+  return response;
+};
+
+/**
+ * Declines a pending offer for the shared waitlist lab event.`;
+if ((source.split(fromStart).length - 1) !== 1) process.exit(4);
+if ((source.split(fromEnd).length - 1) !== 1) process.exit(5);
+const updated = source.replace(fromStart, toStart).replace(fromEnd, toEnd);
+if ((updated.split("const waitsForGroupEventsRefresh =").length - 1) !== 1) process.exit(6);
+if ((updated.split("await refreshResponse.finished();").length - 1) !== 1) process.exit(7);
+fs.writeFileSync(path, updated);
+'
+info "PASS: pilot-only event-table refresh synchronization applied to temporary sidecar helper copy."
+
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- bash -lc 'cd /work/e2e && npm ci --ignore-scripts'
 
 pw_env=(
@@ -159,7 +215,7 @@ run_pw() {
 run_product_check() {
   local file="$1"
   local title="$2"
-  info "Running upstream product check with pilot-only navigation tolerance: $title"
+  info "Running upstream product check with pilot-only E2E helper tolerances: $title"
   run_pw "--project=chromium-deep '$file' --grep '$title'"
 }
 
