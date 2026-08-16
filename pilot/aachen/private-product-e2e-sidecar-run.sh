@@ -91,7 +91,9 @@ fi
 server_pod=""
 while IFS= read -r candidate_pod; do
   [[ -n "$candidate_pod" ]] || continue
-  container_names="$(kubectl -n "$NAMESPACE" get "$candidate_pod" -o jsonpath='{.spec.containers[*].name}')"
+  if ! container_names="$(kubectl -n "$NAMESPACE" get "$candidate_pod" -o jsonpath='{.spec.containers[*].name}' 2>/dev/null)"; then
+    continue
+  fi
   if grep -Eq "(^|[[:space:]])${RUNNER_CONTAINER}([[:space:]]|$)" <<<"$container_names"; then
     [[ -z "$server_pod" ]] || fail "expected exactly one server pod containing the Playwright sidecar"
     server_pod="$candidate_pod"
