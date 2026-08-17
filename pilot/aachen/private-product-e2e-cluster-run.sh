@@ -125,14 +125,13 @@ sed -i \
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(memberPage)).toBeHidden();",' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");",' "$tmp_script")" -eq 1 ]] || exit 1
 
-# On the current exact HEAD, event and RSVP pass and the waitlist body reaches
-# afterEach, but restoreSeededWaitlistEvent then times out at its first member
-# attendance-state wait. At that point the test body has already deleted the
-# promoted member, so cleanup must tolerate the valid "already absent" state.
-# Patch only the temporary cleanup template: include that initial generic wait in
-# the replacement anchor, prove the expected event page loaded, conditionally
-# remove a visible attendance, then retain the fail-closed hidden-leave check and
-# the organizer "Cancel attendance" seeded-capacity proof.
+# The exact-head run reached afterEach but failed on our pilot-only assumption
+# that the waitlist event title is necessarily exposed as an exact ARIA heading.
+# The upstream product contract here is the event attendance surface itself.
+# Remove the pre-cleanup attendance-state wait, prove that navigation stayed on
+# the expected synthetic event and that its attendance container rendered, then
+# conditionally remove a visible attendance and retain the hidden-leave and
+# organizer seeded-capacity proofs. Log only synthetic path/count diagnostics.
 [[ "$(grep -Fc 'const memberStart = "  if (await getLeaveButton(memberPage).isVisible()) {";' "$tmp_script")" -eq 1 ]] || {
   echo 'Expected exactly one waitlist member cleanup start anchor.' >&2
   exit 1
@@ -143,7 +142,7 @@ sed -i \
 }
 
 awk '
-BEGIN { anchor_replaced = 0; heading_inserted = 0 }
+BEGIN { anchor_replaced = 0; proof_inserted = 0 }
 {
   if ($0 == "const memberStart = \"  if (await getLeaveButton(memberPage).isVisible()) {\";") {
     print "const memberStart = \"  await waitForAttendanceState(memberPage);\\n\\n  if (await getLeaveButton(memberPage).isVisible()) {\";"
@@ -151,13 +150,19 @@ BEGIN { anchor_replaced = 0; heading_inserted = 0 }
     next
   }
   if ($0 == "  \"  if (await getLeaveButton(memberPage).isVisible()) {\",") {
-    print "  \"  await expect(memberPage.getByRole(\\\"heading\\\", { name: \\\"Full Event With Waitlist\\\", exact: true })).toBeVisible();\","
-    heading_inserted = 1
+    print "  \"  const memberCleanupPath = new URL(memberPage.url()).pathname;\","
+    print "  \"  const memberCleanupExpectedPath = `/${TEST_COMMUNITY_NAME}/group/${TEST_GROUP_SLUGS.community1.alpha}/event/alpha-waitlist-lab`;\","
+    print "  \"  const memberCleanupAttendanceContainers = await getAttendanceContainer(memberPage).count();\","
+    print "  \"  console.error(\\\"E2E waitlist member cleanup diagnostics:\\\", JSON.stringify({ path: memberCleanupPath, expectedPathMatch: memberCleanupPath === memberCleanupExpectedPath, attendanceContainers: memberCleanupAttendanceContainers }));\","
+    print "  \"  if (memberCleanupPath !== memberCleanupExpectedPath || memberCleanupAttendanceContainers < 1) {\","
+    print "  \"    throw new Error(\\\"waitlist member cleanup did not reach the expected event attendance surface\\\");\","
+    print "  \"  }\","
+    proof_inserted = 1
   }
   print
 }
 END {
-  if (anchor_replaced != 1 || heading_inserted != 1) {
+  if (anchor_replaced != 1 || proof_inserted != 1) {
     exit 43
   }
 }
@@ -165,13 +170,13 @@ END {
 mv "$tmp_next" "$tmp_script"
 
 [[ "$(grep -Fc 'const memberStart = "  await waitForAttendanceState(memberPage);\n\n  if (await getLeaveButton(memberPage).isVisible()) {";' "$tmp_script")" -eq 1 ]] || exit 1
-[[ "$(grep -Fc '  "  await expect(memberPage.getByRole(\"heading\", { name: \"Full Event With Waitlist\", exact: true })).toBeVisible();",' "$tmp_script")" -eq 1 ]] || exit 1
+[[ "$(grep -Fc '  "  const memberCleanupPath = new URL(memberPage.url()).pathname;",' "$tmp_script")" -eq 1 ]] || exit 1
+[[ "$(grep -Fc '  "  const memberCleanupAttendanceContainers = await getAttendanceContainer(memberPage).count();",' "$tmp_script")" -eq 1 ]] || exit 1
+[[ "$(grep -Fc 'waitlist member cleanup did not reach the expected event attendance surface' "$tmp_script")" -eq 1 ]] || exit 1
 
-# The exact-head rerun now fails later in afterEach at the surviving organizer
-# attendance-state wait. Add only synthetic, non-secret diagnostics to the
-# temporary helper copy so the next run reveals whether the expected event page
-# rendered and which public attendance controls exist. The helper still throws
-# the same fail-closed error and no upstream test or product assertion is changed.
+# If a later attendance-state wait still cannot converge, retain a generic,
+# synthetic-only diagnostic at the existing fail-closed helper boundary. This
+# does not weaken the helper or change an upstream assertion.
 [[ "$(grep -Fc '  throw new Error("attendance controls did not converge after bounded refresh retries");' "$tmp_script")" -eq 1 ]] || {
   echo 'Expected exactly one bounded attendance-state failure anchor.' >&2
   exit 1
