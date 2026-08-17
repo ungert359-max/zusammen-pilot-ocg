@@ -125,4 +125,46 @@ sed -i \
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(memberPage)).toBeHidden();",' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");",' "$tmp_script")" -eq 1 ]] || exit 1
 
+# On the current exact HEAD, event and RSVP pass and the waitlist body reaches
+# afterEach, but restoreSeededWaitlistEvent then times out at its first member
+# attendance-state wait. At that point the test body has already deleted the
+# promoted member, so cleanup must tolerate the valid "already absent" state.
+# Patch only the temporary cleanup template: include that initial generic wait in
+# the replacement anchor, prove the expected event page loaded, conditionally
+# remove a visible attendance, then retain the fail-closed hidden-leave check and
+# the organizer "Cancel attendance" seeded-capacity proof.
+[[ "$(grep -Fc 'const memberStart = "  if (await getLeaveButton(memberPage).isVisible()) {";' "$tmp_script")" -eq 1 ]] || {
+  echo 'Expected exactly one waitlist member cleanup start anchor.' >&2
+  exit 1
+}
+[[ "$(grep -Fc '  "  if (await getLeaveButton(memberPage).isVisible()) {",' "$tmp_script")" -eq 1 ]] || {
+  echo 'Expected exactly one waitlist member cleanup replacement start.' >&2
+  exit 1
+}
+
+awk '
+BEGIN { anchor_replaced = 0; heading_inserted = 0 }
+{
+  if ($0 == "const memberStart = \"  if (await getLeaveButton(memberPage).isVisible()) {\";") {
+    print "const memberStart = \"  await waitForAttendanceState(memberPage);\\n\\n  if (await getLeaveButton(memberPage).isVisible()) {\";"
+    anchor_replaced = 1
+    next
+  }
+  if ($0 == "  \"  if (await getLeaveButton(memberPage).isVisible()) {\",") {
+    print "  \"  await expect(memberPage.getByRole(\\\"heading\\\", { name: \\\"Full Event With Waitlist\\\", exact: true })).toBeVisible();\","
+    heading_inserted = 1
+  }
+  print
+}
+END {
+  if (anchor_replaced != 1 || heading_inserted != 1) {
+    exit 43
+  }
+}
+' "$tmp_script" > "$tmp_next"
+mv "$tmp_next" "$tmp_script"
+
+[[ "$(grep -Fc 'const memberStart = "  await waitForAttendanceState(memberPage);\n\n  if (await getLeaveButton(memberPage).isVisible()) {";' "$tmp_script")" -eq 1 ]] || exit 1
+[[ "$(grep -Fc '  "  await expect(memberPage.getByRole(\"heading\", { name: \"Full Event With Waitlist\", exact: true })).toBeVisible();",' "$tmp_script")" -eq 1 ]] || exit 1
+
 bash "$tmp_script"
