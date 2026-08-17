@@ -167,4 +167,40 @@ mv "$tmp_next" "$tmp_script"
 [[ "$(grep -Fc 'const memberStart = "  await waitForAttendanceState(memberPage);\n\n  if (await getLeaveButton(memberPage).isVisible()) {";' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(memberPage.getByRole(\"heading\", { name: \"Full Event With Waitlist\", exact: true })).toBeVisible();",' "$tmp_script")" -eq 1 ]] || exit 1
 
+# The exact-head rerun now fails later in afterEach at the surviving organizer
+# attendance-state wait. Add only synthetic, non-secret diagnostics to the
+# temporary helper copy so the next run reveals whether the expected event page
+# rendered and which public attendance controls exist. The helper still throws
+# the same fail-closed error and no upstream test or product assertion is changed.
+[[ "$(grep -Fc '  throw new Error("attendance controls did not converge after bounded refresh retries");' "$tmp_script")" -eq 1 ]] || {
+  echo 'Expected exactly one bounded attendance-state failure anchor.' >&2
+  exit 1
+}
+
+awk '
+BEGIN { inserted = 0 }
+{
+  if ($0 == "  throw new Error(\"attendance controls did not converge after bounded refresh retries\");") {
+    print "  const attendanceDiagnostics = {"
+    print "    path: new URL(page.url()).pathname,"
+    print "    expectedEventHeading: await page.getByRole(\"heading\", { name: \"Full Event With Waitlist\", exact: true }).count(),"
+    print "    attendanceContainers: await getAttendanceContainer(page).count(),"
+    print "    attendButtons: await getAttendButton(page).count(),"
+    print "    leaveButtons: await getLeaveButton(page).count(),"
+    print "  };"
+    print "  console.error(\"E2E attendance convergence diagnostics:\", JSON.stringify(attendanceDiagnostics));"
+    inserted = 1
+  }
+  print
+}
+END {
+  if (inserted != 1) {
+    exit 44
+  }
+}
+' "$tmp_script" > "$tmp_next"
+mv "$tmp_next" "$tmp_script"
+
+[[ "$(grep -Fc 'console.error("E2E attendance convergence diagnostics:", JSON.stringify(attendanceDiagnostics));' "$tmp_script")" -eq 1 ]] || exit 1
+
 bash "$tmp_script"
