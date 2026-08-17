@@ -320,8 +320,8 @@ jobs:
           last_state = status.get("lastState", {})
           ready = status.get("ready")
           restart_count = status.get("restartCount", 0)
-          print(f"pod={pod.get('metadata', {}).get('name', '')}")
-          print(f"phase={pod.get('status', {}).get('phase', '')}")
+          print("pod={}".format(pod.get("metadata", {}).get("name", "")))
+          print("phase={}".format(pod.get("status", {}).get("phase", "")))
           print(f"ready={ready}")
           print(f"restartCount={restart_count}")
           for label, value in (("state", state), ("lastState", last_state)):
