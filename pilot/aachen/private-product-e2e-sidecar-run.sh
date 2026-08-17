@@ -123,6 +123,24 @@ kubectl -n "$NAMESPACE" cp "$manifest" "${server_pod#pod/}:/work/upstream.sha256
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- bash -lc 'cd /work/e2e && sha256sum -c /work/upstream.sha256 >/dev/null'
 info "PASS: sidecar test inputs are byte-identical to checked-out upstream E2E sources."
 
+# The unchanged upstream functional suite resolves upload fixtures relative to
+# the repository root, while the test-only sidecar intentionally receives only
+# tests/e2e. Mirror the already-committed synthetic upload assets at the exact
+# absolute path that those unchanged tests resolve inside the isolated sidecar.
+# Verify every copied byte before running Playwright; no fixture is generated or
+# modified by the pilot harness.
+E2E_ASSET_DIR="$REPO_ROOT/ocg-server/static/images/e2e"
+[[ -d "$E2E_ASSET_DIR" ]] || fail "upstream E2E upload fixture directory is missing"
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- mkdir -p /ocg-server/static/images/e2e
+kubectl -n "$NAMESPACE" cp "$E2E_ASSET_DIR/." "${server_pod#pod/}:/ocg-server/static/images/e2e" -c "$RUNNER_CONTAINER"
+(
+  cd "$E2E_ASSET_DIR"
+  find . -type f -print0 | sort -z | xargs -0 sha256sum
+) > "$manifest"
+kubectl -n "$NAMESPACE" cp "$manifest" "${server_pod#pod/}:/work/upstream-e2e-assets.sha256" -c "$RUNNER_CONTAINER"
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- bash -lc 'cd /ocg-server/static/images/e2e && sha256sum -c /work/upstream-e2e-assets.sha256 >/dev/null'
+info "PASS: upstream E2E upload fixtures are byte-identical inside the private sidecar."
+
 # The private single-node runtime is healthy on same-pod loopback, but its first
 # server-rendered dashboard navigation can exceed upstream's fixed 5s per-attempt
 # page.goto budget. That helper aborts and retries the navigation every 5s, so a
