@@ -44,6 +44,19 @@ sed -i \
 [[ "$(grep -Fc 'timeout: 30_000' "$tmp_script")" -ge 2 ]] || exit 1
 [[ "$(grep -Fc 'if (attempt < 1) {' "$tmp_script")" -eq 1 ]] || exit 1
 
+# The latest exact-head diagnostic proved that organizer cleanup can exhaust its
+# 8-second action-response observation window while the private runtime remains
+# healthy. Align only this pilot-only cleanup observer with the already bounded
+# 30-second private hydration budget. The response must still be HTTP-successful
+# and the final organizer "Cancel attendance" assertion remains fail-closed.
+[[ "$(grep -Fc '{ timeout: 8_000 },' "$tmp_script")" -eq 1 ]] || {
+  echo 'Expected exactly one 8-second cleanup action-response timeout.' >&2
+  exit 1
+}
+sed -i 's/{ timeout: 8_000 },/{ timeout: 30_000 },/' "$tmp_script"
+[[ "$(grep -Fc '{ timeout: 8_000 },' "$tmp_script")" -eq 0 ]] || exit 1
+[[ "$(grep -Fc '{ timeout: 30_000 },' "$tmp_script")" -eq 1 ]] || exit 1
+
 # The exact same control commit failed the targeted product step twice after a
 # successful public check-in. The mutation itself is therefore reproducible;
 # the remaining failure is the reusable attendee reset immediately afterwards.
