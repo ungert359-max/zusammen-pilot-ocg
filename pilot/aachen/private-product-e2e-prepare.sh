@@ -5,6 +5,7 @@ set -Eeuo pipefail
 # This script never enables public ingress, real email, payments, or real user data.
 # It prepares a dedicated namespace using the already verified private smoke path,
 # then loads only the committed synthetic OCG E2E fixtures.
+# This comment intentionally triggers an exact-head product-E2E rerun after runtime-only pilot value changes.
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 SMOKE_SCRIPT="$REPO_ROOT/pilot/aachen/private-smoke-test.sh"
