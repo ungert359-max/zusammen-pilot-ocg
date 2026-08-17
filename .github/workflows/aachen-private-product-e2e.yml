@@ -239,6 +239,125 @@ jobs:
 
           rm -f "$raw_log"
 
+      - name: Collect sanitized PostgreSQL failure diagnostics
+        if: failure()
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          diagnostics_log="$RUNNER_TEMP/aachen-product-e2e-diagnostics.log"
+          touch "$diagnostics_log"
+
+          if [[ ! -f "$HOME/.ssh/id_ed25519" || ! -f "$HOME/.ssh/known_hosts" ]]; then
+            echo 'PostgreSQL diagnostics unavailable: SSH material was not prepared.' >> "$diagnostics_log"
+            exit 0
+          fi
+
+          set +e
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" 2>&1 <<'REMOTE' >> "$diagnostics_log"
+          set -Eeuo pipefail
+          namespace="${AACHEN_E2E_NAMESPACE:?AACHEN_E2E_NAMESPACE is required}"
+          command -v kubectl >/dev/null
+          command -v python3 >/dev/null
+
+          sanitize() {
+            python3 -c '
+          import re
+          import sys
+
+          sensitive_line = re.compile(r"(?i)(authorization|private[ _-]?key|password|secret|bearer[ :]|ssh-rsa|ecdsa-sha2)")
+          email = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+          long_token = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_+/=-]{48,}(?![A-Za-z0-9])")
+
+          for raw_line in sys.stdin:
+              line = raw_line.rstrip("\n")
+              if sensitive_line.search(line):
+                  print("[redacted sensitive-looking PostgreSQL diagnostic line]")
+                  continue
+              line = email.sub("<redacted-email>", line)
+              line = long_token.sub("<redacted-long-token>", line)
+              print(line)
+          '
+          }
+
+          postgres_pod="$(
+            kubectl -n "$namespace" get pods -o json |
+              python3 -c '
+          import json
+          import sys
+
+          data = json.load(sys.stdin)
+          matches = []
+          for item in data.get("items", []):
+              images = [container.get("image", "") for container in item.get("spec", {}).get("containers", [])]
+              if "zusammen-pilot-postgres:local" in images:
+                  name = item.get("metadata", {}).get("name", "")
+                  if name:
+                      matches.append(name)
+
+          if len(matches) != 1:
+              raise SystemExit(f"expected exactly one isolated PostgreSQL pod, found {len(matches)}")
+          print(matches[0])
+          '
+          )"
+
+          echo '--- sanitized private PostgreSQL pod state (diagnostic only) ---'
+          kubectl -n "$namespace" get pod "$postgres_pod" -o json |
+            python3 -c '
+          import json
+          import sys
+
+          pod = json.load(sys.stdin)
+          statuses = pod.get("status", {}).get("containerStatuses", [])
+          status = statuses[0] if statuses else {}
+          state = status.get("state", {})
+          last_state = status.get("lastState", {})
+          ready = status.get("ready")
+          restart_count = status.get("restartCount", 0)
+          print(f"pod={pod.get('metadata', {}).get('name', '')}")
+          print(f"phase={pod.get('status', {}).get('phase', '')}")
+          print(f"ready={ready}")
+          print(f"restartCount={restart_count}")
+          for label, value in (("state", state), ("lastState", last_state)):
+              for kind in ("waiting", "terminated"):
+                  detail = value.get(kind)
+                  if not detail:
+                      continue
+                  safe = {key: detail.get(key) for key in ("reason", "exitCode", "startedAt", "finishedAt") if key in detail}
+                  print(f"{label}.{kind}={safe}")
+          '
+
+          echo '--- sanitized private PostgreSQL current log tail ---'
+          kubectl -n "$namespace" logs "$postgres_pod" --tail=200 --timestamps=true 2>&1 | sanitize || true
+
+          restart_count="$(kubectl -n "$namespace" get pod "$postgres_pod" -o jsonpath='{.status.containerStatuses[0].restartCount}')"
+          if [[ "$restart_count" =~ ^[0-9]+$ ]] && (( restart_count > 0 )); then
+            echo '--- sanitized private PostgreSQL previous-container log tail ---'
+            kubectl -n "$namespace" logs "$postgres_pod" --previous --tail=120 --timestamps=true 2>&1 | sanitize || true
+          fi
+
+          echo '--- sanitized private PostgreSQL pod events ---'
+          kubectl -n "$namespace" get events \
+            --field-selector "involvedObject.name=$postgres_pod" \
+            --sort-by=.lastTimestamp \
+            -o 'custom-columns=TYPE:.type,REASON:.reason,COUNT:.count,MESSAGE:.message' \
+            --no-headers 2>&1 | tail -n 60 | sanitize || true
+          echo '--- end sanitized private PostgreSQL diagnostics ---'
+          REMOTE
+          diagnostic_status=$?
+          set -e
+
+          if [[ "$diagnostic_status" -ne 0 ]]; then
+            echo 'PostgreSQL diagnostics collection failed without changing the original E2E result.' >> "$diagnostics_log"
+          fi
+          exit 0
+
       - name: Upload sanitized product E2E diagnostics
         if: failure()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
