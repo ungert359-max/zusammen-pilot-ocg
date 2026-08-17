@@ -221,4 +221,52 @@ mv "$tmp_next" "$tmp_script"
 
 [[ "$(grep -Fc 'console.error("E2E attendance convergence diagnostics:", JSON.stringify(attendanceDiagnostics));' "$tmp_script")" -eq 1 ]] || exit 1
 
+# The same exact control SHA has now produced persistent HTTP 500 responses at
+# two different navigation points inside the unchanged waitlist restore helper,
+# while PostgreSQL, migration, server readiness, and /health-check all passed.
+# Do not hide that with more retries. If the product suite fails, emit only a
+# bounded SERVER-SIDE-sanitized server-container log tail so the 500 cause can be
+# isolated before the workflow removes its dedicated namespace. Raw server logs
+# never leave the private host through this diagnostic path.
+set +e
 bash "$tmp_script"
+sidecar_status=$?
+set -e
+
+if [[ "$sidecar_status" -ne 0 ]]; then
+  namespace="${AACHEN_E2E_NAMESPACE:-ocg-aachen-e2e}"
+  release="${AACHEN_E2E_RELEASE:-aachen-e2e}"
+  server_pod="$(
+    kubectl -n "$namespace" get pods \
+      -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$release" \
+      -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.phase}{"\t"}{.spec.containers[*].name}{"\n"}{end}' 2>/dev/null |
+      awk '$2 == "Running" && $0 ~ /aachen-e2e-playwright/ { print $1; exit }'
+  )"
+
+  if [[ -n "$server_pod" ]] && command -v python3 >/dev/null 2>&1; then
+    echo '--- sanitized private server log tail (diagnostic only) ---' >&2
+    kubectl -n "$namespace" logs "$server_pod" -c server --tail=300 --timestamps=true 2>&1 |
+      python3 -c '
+import re
+import sys
+
+sensitive_line = re.compile(r"(?i)(authorization|private[ _-]?key|password|secret|bearer[ :]|ssh-rsa|ecdsa-sha2)")
+email = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+long_token = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_+/=-]{48,}(?![A-Za-z0-9])")
+
+for raw_line in sys.stdin:
+    line = raw_line.rstrip("\n")
+    if sensitive_line.search(line):
+        print("[redacted sensitive-looking server diagnostic line]")
+        continue
+    line = email.sub("<redacted-email>", line)
+    line = long_token.sub("<redacted-long-token>", line)
+    print(line)
+' >&2 || true
+    echo '--- end sanitized private server log tail ---' >&2
+  else
+    echo 'Sanitized server diagnostics unavailable: matching running server pod or python3 not found.' >&2
+  fi
+fi
+
+exit "$sidecar_status"
