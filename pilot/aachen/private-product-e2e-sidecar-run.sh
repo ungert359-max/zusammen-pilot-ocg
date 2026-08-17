@@ -143,6 +143,48 @@ if ((updated.split(to).length - 1) !== 1 || updated.includes(from)) process.exit
 '
 info "PASS: pilot-only 30s navigation-attempt tolerance applied to temporary sidecar helper copy."
 
+# Exact-head failures on different product journeys reached the intended URL but
+# then lacked normal page DOM. The upstream navigation helper currently accepts
+# any HTTP response object, including 4xx/5xx, as a successful navigation. Patch
+# only the already-verified temporary helper copy: require a successful final
+# response, retry bounded transient 5xx responses through the existing retry
+# loop, and fail closed immediately on non-successful non-5xx responses. This
+# preserves every product assertion while making the transport failure explicit.
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
+const fs = require("node:fs");
+const path = "/work/e2e/utils.js";
+let source = fs.readFileSync(path, "utf8");
+const unavailableAnchor = `    message.includes("Navigation completed without a server response") ||`;
+const unavailableReplacement = `    message.includes("Navigation completed without a server response") ||
+    message.includes("Transient server navigation response") ||`;
+if ((source.split(unavailableAnchor).length - 1) !== 1) process.exit(21);
+source = source.replace(unavailableAnchor, unavailableReplacement);
+const responseAnchor = `      if (!response) {
+        throw new Error("Navigation completed without a server response");
+      }
+
+      return;`;
+const responseReplacement = `      if (!response) {
+        throw new Error("Navigation completed without a server response");
+      }
+
+      if (!response.ok()) {
+        const status = response.status();
+        if (status >= 500) {
+          throw new Error(\`Transient server navigation response: HTTP \${status}\`);
+        }
+        throw new Error(\`Navigation failed with HTTP \${status}\`);
+      }
+
+      return;`;
+if ((source.split(responseAnchor).length - 1) !== 1) process.exit(22);
+source = source.replace(responseAnchor, responseReplacement);
+if ((source.split("Transient server navigation response").length - 1) !== 2) process.exit(23);
+if ((source.split("if (!response.ok()) {").length - 1) !== 1) process.exit(24);
+fs.writeFileSync(path, source);
+'
+info "PASS: pilot-only fail-closed HTTP navigation validation applied to temporary sidecar helper copy."
+
 # The exact-head run proved the DELETE request itself succeeds, while the
 # unchanged row-removal assertion can still observe the pre-swap DOM for the
 # upstream default 5s expect window on this constrained private node. Keep every
