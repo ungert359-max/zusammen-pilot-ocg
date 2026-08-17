@@ -60,6 +60,14 @@ postgresql:
   # Kubernetes fsGroup grants access to the persistent volume root.
   postgresqlDataDir: /var/lib/postgresql/data
   primary:
+    # The chart's tiny default resource preset was OOM-killed under the synthetic
+    # product E2E workload. Keep a bounded pilot-only memory request/limit so the
+    # isolated PostgreSQL runtime has headroom without claiming production sizing.
+    resources:
+      requests:
+        memory: 256Mi
+      limits:
+        memory: 1Gi
     persistence:
       mountPath: /var/lib/postgresql
     podSecurityContext:
