@@ -181,6 +181,11 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          raw_log="$RUNNER_TEMP/aachen-product-e2e.raw.log"
+          diagnostics_log="$RUNNER_TEMP/aachen-product-e2e-diagnostics.log"
+          rm -f "$raw_log" "$diagnostics_log"
+
+          set +e
           ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
@@ -190,7 +195,7 @@ jobs:
             -o ServerAliveCountMax=20 \
             -i "$HOME/.ssh/id_ed25519" \
             "$HETZNER_USER@$HETZNER_HOST" \
-            "sudo -n env PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' AACHEN_E2E_RELEASE='$AACHEN_E2E_RELEASE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+            "sudo -n env PILOT_CONTROL_SHA='$PILOT_CONTROL_SHA' AACHEN_E2E_NAMESPACE='$AACHEN_E2E_NAMESPACE' AACHEN_E2E_RELEASE='$AACHEN_E2E_RELEASE' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" 2>&1 <<'REMOTE' | tee "$raw_log"
           set -Eeuo pipefail
           source_dir="/opt/zusammen-pilot/runtime-control/${PILOT_CONTROL_SHA:?PILOT_CONTROL_SHA is required}"
           test "$(git -C "$source_dir" rev-parse HEAD)" = "$PILOT_CONTROL_SHA"
@@ -201,6 +206,47 @@ jobs:
           AACHEN_E2E_RUN_FULL_SUITE=true \
           bash pilot/aachen/private-product-e2e-cluster-run.sh
           REMOTE
+          ssh_status=${PIPESTATUS[0]}
+          set -e
+
+          if [[ "$ssh_status" -ne 0 ]]; then
+            python3 - "$raw_log" "$diagnostics_log" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          source = Path(sys.argv[1])
+          target = Path(sys.argv[2])
+          lines = source.read_text(encoding="utf-8", errors="replace").splitlines()[-350:]
+          sensitive_line = re.compile(r"(?i)(authorization|private[ _-]?key|password|secret|bearer[ :]|ssh-rsa|ecdsa-sha2)")
+          email = re.compile(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", re.IGNORECASE)
+          long_token = re.compile(r"(?<![A-Za-z0-9])[A-Za-z0-9_+/=-]{48,}(?![A-Za-z0-9])")
+
+          sanitized = []
+          for line in lines:
+              if sensitive_line.search(line):
+                  sanitized.append("[redacted sensitive-looking diagnostic line]")
+                  continue
+              line = email.sub("<redacted-email>", line)
+              line = long_token.sub("<redacted-long-token>", line)
+              sanitized.append(line)
+
+          target.write_text("\n".join(sanitized) + "\n", encoding="utf-8")
+          PY
+            rm -f "$raw_log"
+            exit "$ssh_status"
+          fi
+
+          rm -f "$raw_log"
+
+      - name: Upload sanitized product E2E diagnostics
+        if: failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aachen-product-e2e-diagnostics-${{ github.sha }}
+          path: ${{ runner.temp }}/aachen-product-e2e-diagnostics.log
+          if-no-files-found: ignore
+          retention-days: 1
 
       - name: Remove dedicated synthetic E2E namespace
         if: always()
