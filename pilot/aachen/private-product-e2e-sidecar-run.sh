@@ -15,11 +15,12 @@ RELEASE="${AACHEN_E2E_RELEASE:-aachen-e2e}"
 RUN_FULL_SUITE="${AACHEN_E2E_RUN_FULL_SUITE:-true}"
 RUNNER_CONTAINER="aachen-e2e-playwright"
 PLAYWRIGHT_IMAGE="${AACHEN_E2E_PLAYWRIGHT_IMAGE:-mcr.microsoft.com/playwright@sha256:5b8f294aff9041b7191c34a4bab3ac270157a28774d4b0660e9743297b697e48}"
+PRIVATE_VALUES_FILE="${AACHEN_PRIVATE_VALUES_FILE:-/opt/zusammen-pilot/private/aachen-private-values.yaml}"
 
 fail() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 info() { printf '%s\n' "$*"; }
 
-for command_name in bash kubectl k3s grep find sort xargs sha256sum; do
+for command_name in bash kubectl k3s grep find sort xargs sha256sum python3 stat readlink; do
   command -v "$command_name" >/dev/null 2>&1 || fail "required command not found: $command_name"
 done
 
@@ -29,6 +30,67 @@ case "$RUN_FULL_SUITE" in true|false) ;; *) fail "AACHEN_E2E_RUN_FULL_SUITE must
 [[ "$PLAYWRIGHT_IMAGE" == mcr.microsoft.com/playwright@sha256:* ]] || fail "Playwright image must be digest-pinned"
 [[ -d "$E2E_DIR" && -f "$E2E_DIR/package-lock.json" && -f "$E2E_DIR/playwright.config.js" ]] || fail "upstream E2E tree is incomplete"
 [[ -z "$(git -C "$REPO_ROOT" status --porcelain -- tests/e2e || true)" ]] || fail "upstream E2E files are modified"
+[[ -f "$PRIVATE_VALUES_FILE" ]] || fail "private values file does not exist"
+
+private_real="$(readlink -f "$PRIVATE_VALUES_FILE")"
+repo_real="$(readlink -f "$REPO_ROOT")"
+case "$private_real" in
+  "$repo_real"/*) fail "private values file must remain outside the Git repository" ;;
+esac
+case "$(stat -c '%a' "$PRIVATE_VALUES_FILE")" in
+  400|600) ;;
+  *) fail "private values file permissions must be 400 or 600" ;;
+esac
+
+postgres_pod="$(
+  kubectl -n "$NAMESPACE" get pods -o json |
+    python3 -c '
+import json
+import sys
+
+data = json.load(sys.stdin)
+matches = []
+for item in data.get("items", []):
+    images = [c.get("image", "") for c in item.get("spec", {}).get("containers", [])]
+    if "zusammen-pilot-postgres:local" in images:
+        matches.append(item.get("metadata", {}).get("name", ""))
+
+matches = [name for name in matches if name]
+if len(matches) != 1:
+    raise SystemExit(f"expected exactly one local pilot PostgreSQL pod, found {len(matches)}")
+print(matches[0])
+'
+)"
+[[ -n "$postgres_pod" ]] || fail "could not identify the isolated PostgreSQL pod"
+postgres_host="$(kubectl -n "$NAMESPACE" get pod "$postgres_pod" -o jsonpath='{.status.podIP}')"
+[[ -n "$postgres_host" ]] || fail "isolated PostgreSQL pod has no private pod IP"
+
+db_password="$(
+  python3 - "$PRIVATE_VALUES_FILE" <<'PY'
+import pathlib
+import re
+import sys
+
+path = pathlib.Path(sys.argv[1])
+lines = path.read_text(encoding="utf-8").splitlines()
+in_db = False
+
+for line in lines:
+    if not line.strip() or line.lstrip().startswith("#"):
+        continue
+    if not line[0].isspace():
+        in_db = bool(re.fullmatch(r"db:\s*(?:#.*)?", line))
+        continue
+    if in_db:
+        match = re.match(r'^\s+password:\s*(["\']?)(.*?)\1\s*(?:#.*)?$', line)
+        if match and match.group(2):
+            print(match.group(2))
+            raise SystemExit(0)
+
+raise SystemExit("private values do not contain a non-empty db.password")
+PY
+)"
+[[ -n "$db_password" ]] || fail "database password could not be resolved from private values"
 
 server_deployment="$(kubectl -n "$NAMESPACE" get deployment -l "app.kubernetes.io/component=server,app.kubernetes.io/instance=$RELEASE" -o name)"
 [[ -n "$server_deployment" ]] || fail "private E2E server deployment was not found"
@@ -104,6 +166,54 @@ kubectl -n "$NAMESPACE" wait --for=condition=Ready "$server_pod" --timeout=8m >/
 
 resolved_runner_image="$(kubectl -n "$NAMESPACE" get "$server_pod" -o jsonpath="{.status.containerStatuses[?(@.name=='$RUNNER_CONTAINER')].imageID}")"
 [[ "$resolved_runner_image" == *sha256:* ]] || fail "Playwright sidecar image digest was not resolved"
+
+# The unchanged upstream auth suite performs two direct, read-only fixture
+# queries through psql. The digest-pinned Playwright image intentionally does not
+# ship PostgreSQL tools. Reuse the exact psql client and its dynamic loader/libs
+# from the already-running, digest-verified private PostgreSQL container instead
+# of downloading or installing an unpinned package. The copied client lives only
+# inside this synthetic sidecar and is verified with a private select 1 probe.
+PGCLIENT_SOURCE_DIR=/tmp/ocg-aachen-e2e-pgclient
+kubectl -n "$NAMESPACE" exec -i "$postgres_pod" -- sh -s -- "$PGCLIENT_SOURCE_DIR" <<'PGCLIENT'
+set -eu
+root="$1"
+rm -rf "$root"
+mkdir -p "$root/bin" "$root/lib"
+psql_path="$(command -v psql)"
+[ -n "$psql_path" ]
+command -v ldd >/dev/null 2>&1
+command -v awk >/dev/null 2>&1
+command -v tar >/dev/null 2>&1
+ldd "$psql_path" > "$root/ldd.txt"
+loader="$(awk '/ld-linux/ { for (i = 1; i <= NF; i += 1) if ($i ~ /^\//) { print $i; exit } }' "$root/ldd.txt")"
+[ -n "$loader" ]
+cp -L "$psql_path" "$root/bin/psql.real"
+awk '{ for (i = 1; i <= NF; i += 1) if ($i ~ /^\//) print $i }' "$root/ldd.txt" |
+while IFS= read -r dependency; do
+  [ -n "$dependency" ] || continue
+  [ "$dependency" = "$loader" ] && continue
+  cp -L "$dependency" "$root/lib/$(basename "$dependency")"
+done
+cp -L "$loader" "$root/ld.so"
+cat > "$root/bin/psql" <<'WRAPPER'
+#!/bin/sh
+exec /work/pgclient/ld.so --library-path /work/pgclient/lib /work/pgclient/bin/psql.real "$@"
+WRAPPER
+chmod 0555 "$root/bin/psql" "$root/bin/psql.real" "$root/ld.so"
+rm -f "$root/ldd.txt"
+PGCLIENT
+
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- sh -c 'rm -rf /work/pgclient && mkdir -p /work/pgclient && command -v tar >/dev/null 2>&1'
+kubectl -n "$NAMESPACE" exec "$postgres_pod" -- tar -C "$PGCLIENT_SOURCE_DIR" -cf - . |
+  kubectl -n "$NAMESPACE" exec -i "$server_pod" -c "$RUNNER_CONTAINER" -- tar -C /work/pgclient -xf -
+kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- /work/pgclient/bin/psql --version >/dev/null
+psql_probe="$(
+  kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- \
+    env PGPASSWORD="$db_password" \
+    /work/pgclient/bin/psql -h "$postgres_host" -p 5432 -U ocg -d ocg -qtA -c 'select 1'
+)"
+[[ "$psql_probe" == "1" ]] || fail "copied PostgreSQL client could not query the isolated database"
+info "PASS: digest-matched PostgreSQL client is available to the private Playwright sidecar."
 
 # Prove the browser companion reaches the actual server container over the same
 # pod's loopback before copying or executing any tests.
@@ -426,6 +536,12 @@ pw_env=(
   OCG_E2E_REUSE_SERVER=false
   OCG_E2E_MEETINGS_ENABLED=false
   OCG_E2E_PAYMENTS_ENABLED=false
+  OCG_PG_BIN=/work/pgclient/bin
+  OCG_DB_HOST="$postgres_host"
+  OCG_DB_PORT=5432
+  OCG_DB_USER=ocg
+  OCG_DB_PASSWORD="$db_password"
+  OCG_DB_NAME_TESTS_E2E=ocg
   MOZ_DISABLE_CONTENT_SANDBOX=1
 )
 
