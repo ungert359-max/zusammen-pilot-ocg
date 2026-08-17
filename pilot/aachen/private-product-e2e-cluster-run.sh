@@ -108,14 +108,20 @@ mv "$tmp_next" "$tmp_script"
   echo 'Expected exactly one pilot-only member attend-button verification line.' >&2
   exit 1
 }
+[[ "$(grep -Fc 'if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 1) process.exit(17);' "$tmp_script")" -eq 1 ]] || {
+  echo 'Expected exactly one self-check for the pilot-only member attend-button verification.' >&2
+  exit 1
+}
 
 sed -i \
   -e '/^  "  await waitForAttendanceState(memberPage);",$/d' \
   -e '/^  "  await expect(getAttendButton(memberPage)).toBeVisible();",$/d' \
+  -e 's/if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 1) process.exit(17);/if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 0) process.exit(17);/' \
   "$tmp_script"
 
 [[ "$(grep -Fc '  "  await waitForAttendanceState(memberPage);",' "$tmp_script")" -eq 0 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(getAttendButton(memberPage)).toBeVisible();",' "$tmp_script")" -eq 0 ]] || exit 1
+[[ "$(grep -Fc 'if ((source.split("await expect(getAttendButton(memberPage)).toBeVisible();").length - 1) !== 0) process.exit(17);' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(memberPage)).toBeHidden();",' "$tmp_script")" -eq 1 ]] || exit 1
 [[ "$(grep -Fc '  "  await expect(getLeaveButton(organizerPage)).toContainText(\"Cancel attendance\");",' "$tmp_script")" -eq 1 ]] || exit 1
 
