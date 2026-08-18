@@ -179,8 +179,10 @@ set -eu
 root="$1"
 rm -rf "$root"
 mkdir -p "$root/bin" "$root/lib"
-psql_path="$(command -v psql)"
-[ -n "$psql_path" ]
+postgres_path="$(command -v postgres)"
+[ -n "$postgres_path" ]
+psql_path="${postgres_path%/*}/psql"
+[ -x "$psql_path" ]
 command -v ldd >/dev/null 2>&1
 command -v awk >/dev/null 2>&1
 command -v tar >/dev/null 2>&1
