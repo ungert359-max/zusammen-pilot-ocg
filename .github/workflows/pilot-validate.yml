@@ -135,6 +135,19 @@ jobs:
           grep -Fq 'HandleWebhookError::PaymentsNotConfigured' ocg-server/src/handlers/payments.rs
           grep -Fq 'StatusCode::NOT_FOUND' ocg-server/src/handlers/payments.rs
 
+      - name: Set up Rust for provider-independent payment tests
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.97.1
+
+      - name: Install Tailwind CSS for payment test build
+        run: |
+          wget -O /usr/local/bin/tailwindcss https://github.com/tailwindlabs/tailwindcss/releases/download/v4.1.10/tailwindcss-linux-x64
+          chmod +x /usr/local/bin/tailwindcss
+
+      - name: Run provider-independent payment boundary tests
+        run: cargo test -p ocg-server get_or_create_checkout_redirect_url
+
       - name: Enforce private pilot manifest invariants
         shell: bash
         run: |
