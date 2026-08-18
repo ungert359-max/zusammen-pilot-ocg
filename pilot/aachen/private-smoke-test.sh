@@ -165,6 +165,16 @@ helm template "$RELEASE" "$tmpdir/ocg" \
   > "$rendered"
 chmod 600 "$rendered"
 
+# Private values are intentionally loaded after the committed pilot values.
+# Refuse the deployment if that final merged configuration enables payments or
+# injects provider credentials; the pilot payment boundary must stay fail-closed.
+if ! grep -Fq 'payments: null' "$rendered"; then
+  fail "rendered private pilot configuration does not keep payments disabled"
+fi
+if grep -Eq '^[[:space:]]+(publishable_key|secret_key|webhook_secret):' "$rendered"; then
+  fail "rendered private pilot configuration contains payment provider credentials"
+fi
+
 # Fail closed if deployment-time values fall back to the upstream development
 # password, if any database reference can pull from a registry instead of using
 # the locally verified PostGIS image, if install-time helper images remain
