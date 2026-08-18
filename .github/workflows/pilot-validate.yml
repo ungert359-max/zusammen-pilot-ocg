@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - verified-ocg-feature-base
     paths-ignore:
       - pilot/aachen/DEPLOYMENT-GATES.md
   pull_request:
