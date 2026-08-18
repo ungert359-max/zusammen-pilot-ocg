@@ -82,6 +82,59 @@ jobs:
           --show-only templates/db_migrator_secret.yaml
           > /tmp/aachen-bootstrap-secret.yaml
 
+      - name: Enforce payments disabled boundary
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          rendered=/tmp/zusammen-pilot.yaml
+
+          required_payment_paths=(
+            ocg-server/src/db/payments.rs
+            ocg-server/src/handlers/payments.rs
+            ocg-server/src/handlers/payments/tests.rs
+            ocg-server/src/handlers/dashboard/group/refunds.rs
+            ocg-server/src/services/payments.rs
+            ocg-server/src/services/payments/manager.rs
+            ocg-server/src/services/payments/provider.rs
+            ocg-server/src/services/payments/provider/stripe.rs
+            ocg-server/src/services/payments/refund_recorder.rs
+            ocg-server/src/services/payments/refund_worker.rs
+            ocg-server/src/services/payments/webhook_reconciler.rs
+            ocg-server/src/types/payments.rs
+          )
+          for path in "${required_payment_paths[@]}"; do
+            if [[ ! -s "$path" ]]; then
+              echo "Required upstream payment capability is missing: $path" >&2
+              exit 1
+            fi
+          done
+
+          for values_file in charts/ocg/values.yaml pilot/aachen/values-pilot.yaml; do
+            if ! grep -A 4 '^payments:$' "$values_file" | grep -Eq '^  enabled:[[:space:]]*false[[:space:]]*$'; then
+              echo "Payments must default to disabled in $values_file" >&2
+              exit 1
+            fi
+          done
+
+          if grep -Eq '^[[:space:]]+(publishableKey|secretKey|webhookSecret):[[:space:]]*[^[:space:]#]+' pilot/aachen/values-pilot.yaml; then
+            echo 'Aachen pilot values must not contain committed payment provider credentials.' >&2
+            exit 1
+          fi
+
+          if ! grep -Fq 'payments: null' "$rendered"; then
+            echo 'The private pilot render must explicitly disable payments.' >&2
+            exit 1
+          fi
+          if grep -Eq '^[[:space:]]+(publishable_key|secret_key|webhook_secret):' "$rendered"; then
+            echo 'The private pilot render must not contain payment provider credentials.' >&2
+            exit 1
+          fi
+
+          grep -Fq 'None => None' ocg-server/src/services/payments/provider.rs
+          grep -Fq 'PaymentsNotConfigured' ocg-server/src/services/payments/manager.rs
+          grep -Fq 'HandleWebhookError::PaymentsNotConfigured' ocg-server/src/handlers/payments.rs
+          grep -Fq 'StatusCode::NOT_FOUND' ocg-server/src/handlers/payments.rs
+
       - name: Enforce private pilot manifest invariants
         shell: bash
         run: |
