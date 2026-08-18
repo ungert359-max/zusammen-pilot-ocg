@@ -207,7 +207,7 @@ PGCLIENT
 
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- sh -c 'rm -rf /work/pgclient && mkdir -p /work/pgclient && command -v tar >/dev/null 2>&1'
 kubectl -n "$NAMESPACE" exec "$postgres_pod" -- tar -C "$PGCLIENT_SOURCE_DIR" -cf - . |
-  kubectl -n "$NAMESPACE" exec -i "$server_pod" -c "$RUNNER_CONTAINER" -- tar -C /work/pgclient -xf -
+  kubectl -n "$NAMESPACE" exec -i "$server_pod" -c "$RUNNER_CONTAINER" -- tar --no-same-owner -C /work/pgclient -xf -
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- /work/pgclient/bin/psql --version >/dev/null
 psql_probe="$(
   kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- \
