@@ -570,8 +570,41 @@ async fn get_or_create_checkout_redirect_url_requires_paid_recipient() {
 }
 
 #[tokio::test]
-async fn get_or_create_checkout_redirect_url_reuses_existing_url_without_provider() {
-    // Setup a checkout with an existing provider URL
+async fn get_or_create_checkout_redirect_url_rejects_existing_url_without_provider() {
+    // Setup a checkout with a persisted provider URL from an earlier paid state.
+    let prepared_checkout = PreparedEventCheckout {
+        purchase: EventPurchaseSummary {
+            provider_checkout_url: Some("https://example.test/checkout".to_string()),
+            ..sample_event_purchase_summary(Uuid::new_v4(), Uuid::new_v4(), None, None)
+        },
+        ..sample_prepared_event_checkout(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+            None,
+            GroupPaymentRecipient {
+                provider: PaymentProvider::Stripe,
+                recipient_id: "acct_test_123".to_string(),
+            },
+        )
+    };
+    let mut db = MockDB::new();
+    db.expect_get_event_purchase_summary().never();
+
+    // Reject persisted checkout URLs when payments are currently disabled.
+    let manager = sample_payments_manager(db, MockNotificationsManager::new(), None);
+    let err = manager
+        .get_or_create_checkout_redirect_url(&prepared_checkout, Uuid::new_v4())
+        .await
+        .expect_err("unconfigured payments to reject persisted checkout URLs");
+
+    assert_eq!(err.to_string(), "payments are not configured");
+}
+
+#[tokio::test]
+async fn get_or_create_checkout_redirect_url_reuses_existing_url_with_provider() {
+    // Setup a checkout with an existing provider URL and an active provider.
     let existing_url = "https://example.test/checkout".to_string();
     let prepared_checkout = PreparedEventCheckout {
         purchase: EventPurchaseSummary {
@@ -590,19 +623,20 @@ async fn get_or_create_checkout_redirect_url_reuses_existing_url_without_provide
             },
         )
     };
-    // Guard against database access before reusing the URL
     let mut db = MockDB::new();
     db.expect_get_event_purchase_summary().never();
 
-    // Reuse the URL without a configured provider
-    let manager = sample_payments_manager(db, MockNotificationsManager::new(), None);
-
+    // Preserve the existing URL when paid operations are explicitly configured.
+    let manager = sample_payments_manager(
+        db,
+        MockNotificationsManager::new(),
+        Some(MockPaymentsProvider::new()),
+    );
     let redirect_url = manager
         .get_or_create_checkout_redirect_url(&prepared_checkout, Uuid::new_v4())
         .await
-        .unwrap();
+        .expect("configured payments to reuse persisted checkout URLs");
 
-    // Check the existing URL is preserved
     assert_eq!(redirect_url, existing_url);
 }
 

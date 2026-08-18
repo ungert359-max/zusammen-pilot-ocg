@@ -183,14 +183,15 @@ impl PgPaymentsManager {
         prepared_checkout: &PreparedEventCheckout,
         user_id: Uuid,
     ) -> Result<String> {
+        // Require a currently configured provider before returning any provider checkout URL.
+        let payments_provider = self.payments_provider()?;
+
         if let Some(provider_checkout_url) =
             prepared_checkout.purchase.provider_checkout_url.clone()
         {
             return Ok(provider_checkout_url);
         }
 
-        // Load the payment provider required to open a fresh checkout session
-        let payments_provider = self.payments_provider()?;
         let currency_code = prepared_checkout
             .purchase
             .currency_code
