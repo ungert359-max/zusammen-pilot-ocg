@@ -146,7 +146,9 @@ jobs:
           chmod +x /usr/local/bin/tailwindcss
 
       - name: Run provider-independent payment boundary tests
-        run: cargo test -p ocg-server get_or_create_checkout_redirect_url
+        run: |
+          cargo test -p ocg-server get_or_create_checkout_redirect_url
+          cargo test -p ocg-server request_refund
 
       - name: Enforce private pilot manifest invariants
         shell: bash
