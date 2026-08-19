@@ -1,5 +1,10 @@
 import { isSuccessfulXHRStatus } from "/static/js/common/utils.js";
-import { getAttendanceMeta } from "/static/js/event/attendance-dom.js";
+import {
+  getAttendanceControl,
+  getAttendanceMeta,
+  setAttendanceControlDisabledStyles,
+  setAttendanceControlLabel,
+} from "/static/js/event/attendance-dom.js";
 import {
   showAdmissionOfferState,
   showAttendeeState,
@@ -13,6 +18,9 @@ import {
   showWaitlistedAttendanceState,
 } from "/static/js/event/attendance-view.js";
 import { parseJsonResponse, showSignedOutFallback } from "/static/js/event/attendance/shared.js";
+
+const PAID_TICKETS_UNAVAILABLE_LABEL = "Paid tickets temporarily unavailable";
+const PAID_TICKETS_UNAVAILABLE_TITLE = "Paid checkout is not currently available for this event.";
 
 /**
  * Renders the current attendance response for a container.
@@ -48,6 +56,16 @@ export const renderAttendanceCheckResponse = (container, event) => {
 
   if (response.status === "pending-payment") {
     showPendingPaymentState(container, meta, response);
+    if (!response.resume_checkout_url) {
+      const attendButton = getAttendanceControl(container, "attend-btn");
+      if (attendButton instanceof HTMLButtonElement) {
+        attendButton.disabled = true;
+        delete attendButton.dataset.resumeUrl;
+        setAttendanceControlLabel(attendButton, PAID_TICKETS_UNAVAILABLE_LABEL);
+        attendButton.title = PAID_TICKETS_UNAVAILABLE_TITLE;
+        setAttendanceControlDisabledStyles(attendButton, true);
+      }
+    }
     return;
   }
 
