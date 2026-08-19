@@ -69,6 +69,7 @@ mod tests;
 #[instrument(skip_all)]
 pub(crate) async fn page(
     State(db): State<DynDB>,
+    State(payments_cfg): State<Option<PaymentsConfig>>,
     State(server_cfg): State<HttpServerConfig>,
     Path((community_name, group_slug, event_slug)): Path<(String, String, String)>,
     uri: Uri,
@@ -103,6 +104,11 @@ pub(crate) async fn page(
 
     // Trim gallery media
     trim_public_gallery_images(&mut event.photos_urls);
+
+    // Keep paid ticket surfaces fail-closed when provider-backed payments are disabled
+    if payments_cfg.is_none() {
+        apply_payments_disabled_public_view(&mut event);
+    }
 
     // Prepare template
     let template = Page {
@@ -192,14 +198,20 @@ pub(crate) async fn check_in_page(
 #[instrument(skip_all)]
 pub(crate) async fn availability(
     State(db): State<DynDB>,
+    State(payments_cfg): State<Option<PaymentsConfig>>,
     CommunityId(community_id): CommunityId,
     Path((_, group_slug, event_slug)): Path<(String, String, String)>,
 ) -> Result<impl IntoResponse, HandlerError> {
     // Get current public event availability
-    let event = db
+    let mut event = db
         .get_event_full_by_slug(community_id, &group_slug, &event_slug)
         .await?
         .ok_or(HandlerError::NotFound)?;
+
+    // Keep hydrated ticket availability aligned with the initial fail-closed page render
+    if payments_cfg.is_none() {
+        apply_payments_disabled_public_view(&mut event);
+    }
 
     // Prevent volatile seat availability from being cached
     let mut headers = HeaderMap::new();
@@ -950,6 +962,20 @@ pub(crate) struct RefundRequestInput {
 }
 
 // Helpers.
+
+/// Removes provider-backed ticket affordances from attendee-facing event data while payments are off.
+fn apply_payments_disabled_public_view(event: &mut EventFull) {
+    if let Some(ticket_types) = event.ticket_types.as_mut() {
+        ticket_types.retain(|ticket_type| ticket_type.current_amount_minor() == Some(0));
+        for ticket_type in ticket_types {
+            ticket_type
+                .price_windows
+                .retain(|price_window| price_window.amount_minor == 0);
+        }
+    }
+    event.discount_codes = None;
+    event.payment_currency_code = None;
+}
 
 /// Creates or reuses a pending checkout hold for the attendee.
 async fn create_checkout_hold(
