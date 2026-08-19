@@ -26,4 +26,14 @@ jobs:
 
       - name: Reject local edits to upstream OCG core
         shell: bash
-        run: bash pilot/aachen/verify-upstream-core-untouched.sh origin/main HEAD
+        run: |
+          set -Eeuo pipefail
+          base_ref=origin/main
+          branch="${GITHUB_HEAD_REF:-$GITHUB_REF_NAME}"
+          if [[ "$branch" == sync/ocg-upstream-* ]]; then
+            git fetch --no-tags \
+              https://github.com/cncf/open-community-groups.git \
+              main:refs/remotes/upstream/main
+            base_ref=upstream/main
+          fi
+          bash pilot/aachen/verify-upstream-core-untouched.sh "$base_ref" HEAD

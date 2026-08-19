@@ -5,6 +5,7 @@ on:
     branches:
       - pilot-aachen-mvp
       - verified-ocg-feature-base
+      - 'sync/ocg-upstream-*'
     paths-ignore:
       - pilot/aachen/DEPLOYMENT-GATES.md
   pull_request:
@@ -98,7 +99,11 @@ jobs:
             ocg-server/src/services/payments/provider.rs
             ocg-server/src/services/payments/provider/stripe.rs
             ocg-server/src/services/payments/refund_recorder.rs
-            ocg-server/src/services/payments/refund_worker.rs
+            ocg-server/src/services/payments/workers.rs
+            ocg-server/src/services/payments/workers/application_fee_adjustment.rs
+            ocg-server/src/services/payments/workers/credit_note.rs
+            ocg-server/src/services/payments/workers/recovery.rs
+            ocg-server/src/services/payments/workers/refund.rs
             ocg-server/src/services/payments/webhook_reconciler.rs
             ocg-server/src/types/payments.rs
           )
