@@ -101,6 +101,7 @@ jobs:
             ocg-server/src/services/payments/refund_recorder.rs
             ocg-server/src/services/payments/workers.rs
             ocg-server/src/services/payments/workers/application_fee_adjustment.rs
+            ocg-server/src/services/payments/workers/claim_loop.rs
             ocg-server/src/services/payments/workers/credit_note.rs
             ocg-server/src/services/payments/workers/recovery.rs
             ocg-server/src/services/payments/workers/refund.rs
@@ -121,7 +122,7 @@ jobs:
             fi
           done
 
-          if grep -Eq '^[[:space:]]+(publishableKey|secretKey|webhookSecret):[[:space:]]*[^[:space:]#]+' pilot/aachen/values-pilot.yaml; then
+          if grep -Eq '^[[:space:]]+(publishableKey|secretKey|webhookSecret|connectedWebhookSecret):[[:space:]]*[^[:space:]#]+' pilot/aachen/values-pilot.yaml; then
             echo 'Aachen pilot values must not contain committed payment provider credentials.' >&2
             exit 1
           fi
@@ -130,7 +131,7 @@ jobs:
             echo 'The private pilot render must explicitly disable payments.' >&2
             exit 1
           fi
-          if grep -Eq '^[[:space:]]+(publishable_key|secret_key|webhook_secret):' "$rendered"; then
+          if grep -Eq '^[[:space:]]+(publishable_key|secret_key|webhook_secret|connected_webhook_secret):' "$rendered"; then
             echo 'The private pilot render must not contain payment provider credentials.' >&2
             exit 1
           fi
