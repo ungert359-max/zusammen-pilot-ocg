@@ -1,0 +1,240 @@
+name: Aachen isolated Hetzner preview
+
+on:
+  push:
+    branches:
+      - preview/hetzner-current-2026-08-19
+    paths:
+      - .github/workflows/aachen-hetzner-preview.yml
+      - pilot/aachen/preview/**
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aachen-isolated-hetzner-preview
+  cancel-in-progress: false
+
+jobs:
+  preview:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      HETZNER_HOST: 178.104.6.218
+      HETZNER_USER: deploy
+      PREVIEW_NAMESPACE: ocg-aachen-preview-20260819
+      PREVIEW_RELEASE: aachen-preview-20260819
+      PREVIEW_REMOTE_PORT: '18081'
+    steps:
+      - name: Checkout preview snapshot
+        uses: actions/checkout@v4
+
+      - name: Derive isolated preview image names
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          short="${GITHUB_SHA:0:12}"
+          echo "PREVIEW_SHORT=$short" >> "$GITHUB_ENV"
+          echo "PREVIEW_SERVER_REPO=zusammen-preview-server-$short" >> "$GITHUB_ENV"
+          echo "PREVIEW_MIGRATOR_REPO=zusammen-preview-dbmigrator-$short" >> "$GITHUB_ENV"
+          echo "PREVIEW_POSTGRES_IMAGE=zusammen-preview-postgres-$short:local" >> "$GITHUB_ENV"
+
+      - name: Build preview application images away from Hetzner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          docker build \
+            --build-arg "OCG_COMMIT_SHA=$GITHUB_SHA" \
+            -f ocg-server/Dockerfile \
+            -t "$PREVIEW_SERVER_REPO:local" \
+            .
+          docker build \
+            -f database/migrations/Dockerfile \
+            -t "$PREVIEW_MIGRATOR_REPO:local" \
+            .
+          docker save "$PREVIEW_SERVER_REPO:local" | gzip -1 > /tmp/preview-server.tar.gz
+          docker save "$PREVIEW_MIGRATOR_REPO:local" | gzip -1 > /tmp/preview-migrator.tar.gz
+
+      - name: Prepare pinned SSH connection
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Transfer preview images
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          scp \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -i "$HOME/.ssh/id_ed25519" \
+            /tmp/preview-server.tar.gz \
+            /tmp/preview-migrator.tar.gz \
+            "$HETZNER_USER@$HETZNER_HOST:/tmp/"
+
+      - name: Import and deploy isolated preview
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            "$HETZNER_USER@$HETZNER_HOST" \
+            "sudo -n env GITHUB_SHA='$GITHUB_SHA' PREVIEW_SHORT='$PREVIEW_SHORT' PREVIEW_NAMESPACE='$PREVIEW_NAMESPACE' PREVIEW_RELEASE='$PREVIEW_RELEASE' PREVIEW_SERVER_REPO='$PREVIEW_SERVER_REPO' PREVIEW_MIGRATOR_REPO='$PREVIEW_MIGRATOR_REPO' PREVIEW_POSTGRES_IMAGE='$PREVIEW_POSTGRES_IMAGE' PREVIEW_REMOTE_PORT='$PREVIEW_REMOTE_PORT' KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s" <<'REMOTE'
+          set -Eeuo pipefail
+          umask 077
+
+          test "$PREVIEW_NAMESPACE" != ocg-aachen-smoke
+          test "$PREVIEW_RELEASE" != aachen-smoke
+          k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
+
+          # Import only unique preview image names. Existing verified pilot tags are
+          # read as a source only for the unchanged PostgreSQL image and never retagged.
+          gzip -dc /tmp/preview-server.tar.gz | k3s ctr images import -
+          gzip -dc /tmp/preview-migrator.tar.gz | k3s ctr images import -
+          rm -f /tmp/preview-server.tar.gz /tmp/preview-migrator.tar.gz
+          k3s ctr images list | grep -F "$PREVIEW_SERVER_REPO:local"
+          k3s ctr images list | grep -F "$PREVIEW_MIGRATOR_REPO:local"
+          k3s ctr images list | grep -F 'zusammen-pilot-postgres:local'
+          if ! k3s ctr images list | grep -Fq "$PREVIEW_POSTGRES_IMAGE"; then
+            k3s ctr images tag zusammen-pilot-postgres:local "$PREVIEW_POSTGRES_IMAGE"
+          fi
+          k3s ctr images list | grep -F "$PREVIEW_POSTGRES_IMAGE"
+
+          source_dir="/opt/zusammen-pilot/preview-control/$GITHUB_SHA"
+          if [[ ! -d "$source_dir/.git" ]]; then
+            mkdir -p "$(dirname "$source_dir")"
+            git clone --quiet --no-checkout https://github.com/ungert359-max/zusammen-pilot-ocg.git "$source_dir"
+          fi
+          git -C "$source_dir" fetch --quiet --depth 1 origin "$GITHUB_SHA"
+          git -C "$source_dir" checkout --quiet --detach "$GITHUB_SHA"
+          test "$(git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
+
+          private_dir=/opt/zusammen-pilot/private-preview
+          private_values="$private_dir/$PREVIEW_SHORT-values.yaml"
+          install -d -m 700 "$private_dir"
+          if [[ ! -f "$private_values" ]]; then
+            tmp_key="$(mktemp "$private_dir/.badge-key.XXXXXX")"
+            private_der="$(mktemp "$private_dir/.badge-private.XXXXXX")"
+            public_der="$(mktemp "$private_dir/.badge-public.XXXXXX")"
+            trap 'rm -f "$tmp_key" "$private_der" "$public_der"' RETURN
+            openssl genpkey -algorithm ED25519 -out "$tmp_key" >/dev/null 2>&1
+            openssl pkey -in "$tmp_key" -outform DER -out "$private_der"
+            openssl pkey -in "$tmp_key" -pubout -outform DER -out "$public_der"
+            read -r jwk_x jwk_d < <(python3 - "$private_der" "$public_der" <<'PY'
+          import base64, pathlib, sys
+          private_der = pathlib.Path(sys.argv[1]).read_bytes()
+          public_der = pathlib.Path(sys.argv[2]).read_bytes()
+          private_prefix = bytes.fromhex('302e020100300506032b657004220420')
+          public_prefix = bytes.fromhex('302a300506032b6570032100')
+          if not private_der.startswith(private_prefix) or not public_der.startswith(public_prefix):
+              raise SystemExit('unexpected Ed25519 encoding')
+          enc = lambda b: base64.urlsafe_b64encode(b).rstrip(b'=').decode('ascii')
+          print(enc(public_der[len(public_prefix):]), enc(private_der[len(private_prefix):]))
+          PY
+            )
+            db_password="$(openssl rand -hex 32)"
+            cat > "$private_values" <<EOF
+          db:
+            password: "$db_password"
+          postgresql:
+            auth:
+              password: "$db_password"
+          email:
+            fromAddress: '"noreply@preview.invalid"'
+            fromName: '"Aachen Preview"'
+            rcptsWhitelist: []
+            smtp:
+              host: '"localhost"'
+              username: '""'
+              password: '""'
+          server:
+            baseUrl: "http://127.0.0.1:$PREVIEW_REMOTE_PORT"
+            badges:
+              signingKey:
+                key_id: "aachen-preview-$PREVIEW_SHORT"
+                private_jwk:
+                  kty: "OKP"
+                  crv: "Ed25519"
+                  x: "$jwk_x"
+                  d: "$jwk_d"
+          EOF
+            chmod 600 "$private_values"
+            rm -f "$tmp_key" "$private_der" "$public_der"
+            trap - RETURN
+          fi
+
+          cd "$source_dir"
+          chmod +x pilot/aachen/preview/private-preview-deploy.sh pilot/aachen/preview/pin-preview-images.sh
+          AACHEN_PREVIEW_NAMESPACE="$PREVIEW_NAMESPACE" \
+          AACHEN_PREVIEW_RELEASE="$PREVIEW_RELEASE" \
+          AACHEN_PREVIEW_PRIVATE_VALUES_FILE="$private_values" \
+          AACHEN_PREVIEW_SERVER_REPO="$PREVIEW_SERVER_REPO" \
+          AACHEN_PREVIEW_MIGRATOR_REPO="$PREVIEW_MIGRATOR_REPO" \
+          AACHEN_PREVIEW_POSTGRES_IMAGE="$PREVIEW_POSTGRES_IMAGE" \
+          AACHEN_PREVIEW_LOCAL_PORT="$PREVIEW_REMOTE_PORT" \
+          bash pilot/aachen/preview/private-preview-deploy.sh
+
+          # Keep a loopback-only viewer endpoint alive. This is NOT public:
+          # the browser can reach it only through an authenticated SSH tunnel.
+          unit="aachen-preview-$PREVIEW_SHORT-portforward.service"
+          cat > "/etc/systemd/system/$unit" <<EOF
+          [Unit]
+          Description=Aachen private preview loopback port-forward
+          After=k3s.service
+          Requires=k3s.service
+
+          [Service]
+          Type=simple
+          ExecStart=/bin/bash -lc 'svc=$(/usr/local/bin/k3s kubectl -n $PREVIEW_NAMESPACE get service -l app.kubernetes.io/component=server,app.kubernetes.io/instance=$PREVIEW_RELEASE -o name); exec /usr/local/bin/k3s kubectl -n $PREVIEW_NAMESPACE port-forward --address 127.0.0.1 "$svc" $PREVIEW_REMOTE_PORT:80'
+          Restart=always
+          RestartSec=3
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+          systemctl daemon-reload
+          systemctl enable --now "$unit"
+          sleep 3
+          curl --fail --silent --show-error --max-time 5 "http://127.0.0.1:$PREVIEW_REMOTE_PORT/health-check" >/dev/null
+          echo "PASS: private preview viewer is listening on Hetzner loopback port $PREVIEW_REMOTE_PORT."
+          REMOTE
+
+      - name: Verify preview through SSH tunnel
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ExitOnForwardFailure=yes \
+            -i "$HOME/.ssh/id_ed25519" \
+            -N -L 18082:127.0.0.1:"$PREVIEW_REMOTE_PORT" \
+            "$HETZNER_USER@$HETZNER_HOST" &
+          tunnel_pid=$!
+          trap 'kill "$tunnel_pid" >/dev/null 2>&1 || true' EXIT
+          for _ in $(seq 1 30); do
+            if curl --fail --silent --show-error --max-time 3 http://127.0.0.1:18082/health-check >/dev/null; then
+              exit 0
+            fi
+            sleep 2
+          done
+          echo 'Preview was not reachable through the SSH-only viewer tunnel.' >&2
+          exit 1
