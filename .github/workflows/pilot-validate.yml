@@ -149,6 +149,8 @@ jobs:
         run: |
           cargo test -p ocg-server get_or_create_checkout_redirect_url
           cargo test -p ocg-server request_refund
+          cargo test -p ocg-server enrollment_state
+          cargo test -p ocg-server start_checkout_completes_free_ticket_without_payments_config
 
       - name: Enforce private pilot manifest invariants
         shell: bash
