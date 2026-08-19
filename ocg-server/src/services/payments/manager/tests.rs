@@ -797,8 +797,12 @@ async fn request_refund_records_request_with_notification_context() {
         })
         .times(1)
         .returning(|_, _, _, _, _| Ok(()));
-    // Record the attendee refund request
-    let manager = sample_payments_manager(db, MockNotificationsManager::new(), None);
+    // Record the attendee refund request with paid operations configured
+    let manager = sample_payments_manager(
+        db,
+        MockNotificationsManager::new(),
+        Some(MockPaymentsProvider::new()),
+    );
 
     manager
         .request_refund(&RequestRefundInput {
@@ -809,6 +813,28 @@ async fn request_refund_records_request_with_notification_context() {
         })
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn request_refund_returns_error_when_payments_are_unconfigured() {
+    // Ensure the disabled boundary rejects before any notification or database access.
+    let mut db = MockDB::new();
+    db.expect_get_event_summary_by_id().never();
+    db.expect_get_site_settings().never();
+    db.expect_request_event_refund().never();
+
+    let manager = sample_payments_manager(db, MockNotificationsManager::new(), None);
+    let err = manager
+        .request_refund(&RequestRefundInput {
+            community_id: Uuid::new_v4(),
+            event_id: Uuid::new_v4(),
+            user_id: Uuid::new_v4(),
+            requested_reason: Some("Need to cancel".to_string()),
+        })
+        .await
+        .expect_err("unconfigured payments to reject refund requests");
+
+    assert_eq!(err.to_string(), "payments are not configured");
 }
 
 #[tokio::test]
@@ -824,7 +850,11 @@ async fn request_refund_returns_error_when_notification_context_load_fails() {
     db.expect_request_event_refund().never();
 
     // Attempt to create a request without its durable notification payload
-    let manager = sample_payments_manager(db, MockNotificationsManager::new(), None);
+    let manager = sample_payments_manager(
+        db,
+        MockNotificationsManager::new(),
+        Some(MockPaymentsProvider::new()),
+    );
     let err = manager
         .request_refund(&RequestRefundInput {
             community_id,

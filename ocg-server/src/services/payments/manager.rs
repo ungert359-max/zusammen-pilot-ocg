@@ -309,6 +309,9 @@ impl PgPaymentsManager {
 
     /// Records an attendee refund request with notification payload data.
     pub(crate) async fn request_refund(&self, input: &RequestRefundInput) -> Result<()> {
+        // Refund requests are paid operations; fail before any reads or writes when disabled.
+        self.payments_provider()?;
+
         // Build the organizer notification payload before recording the refund request
         let template_data = self
             .notification_composer
