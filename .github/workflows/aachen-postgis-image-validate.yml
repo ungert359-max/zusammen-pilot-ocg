@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - 'sync/ocg-upstream-*'
     paths:
       - pilot/aachen/postgres-postgis/**
       - .github/workflows/aachen-postgis-image-validate.yml

@@ -46,6 +46,26 @@ The disabled-state integration must retain these invariants:
 - The payment webhook must not be registered as an active payment integration when payments configuration is absent.
 - Pilot validation and private deployment checks must reject accidental payment-provider credentials or an active payment render while the pilot is configured OFF.
 
+## Reviewed core exception patch
+
+Configuration and the Helm adapter remove the provider configuration, but they cannot neutralize
+provider URLs and paid-state fields already persisted in PostgreSQL before payments are disabled.
+They also cannot prevent the upstream refund command from performing database work before it
+discovers that no provider exists. The fail-closed boundary therefore requires a narrowly scoped
+pilot exception in exactly these upstream-core files:
+
+- `ocg-server/src/handlers/event.rs`
+- `ocg-server/src/services/payments/manager.rs`
+- `ocg-server/src/services/payments/manager/tests.rs`
+- `ocg-server/static/js/event/attendance/status-renderer.js`
+
+Relative to reviewed upstream `main`, the complete binary-safe patch fingerprint is
+`776937fe79ae3d8d38f1b95ab92b6cd22f6b3463789740453966a2782a343fd3`. The integrity gate
+verifies this exact fingerprint; matching one of the paths is not sufficient. Any upstream rebase
+or semantic change to the exception must fail closed and receive a new explicit review, updated
+regressions and a new fingerprint. Fork `main` remains byte-for-byte upstream and never carries
+this exception.
+
 ## Remaining hardening before `PAYMENT_INTEGRATED_BUT_DISABLED`
 
 The following boundaries remain separate verification/work items and must not be treated as completed merely because the provider is OFF:

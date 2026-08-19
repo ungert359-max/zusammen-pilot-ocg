@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - 'sync/ocg-upstream-*'
     paths:
       - .github/workflows/aachen-private-product-e2e.yml
       - pilot/aachen/private-product-e2e-prepare.sh
