@@ -454,12 +454,15 @@ pub(crate) async fn check_in(
 pub(crate) async fn enrollment_state(
     CurrentUser(user): CurrentUser,
     State(db): State<DynDB>,
+    State(payments_cfg): State<Option<PaymentsConfig>>,
     Path((_, event_id)): Path<(String, Uuid)>,
     CommunityId(community_id): CommunityId,
 ) -> Result<impl IntoResponse, HandlerError> {
     // Load enrollment state without failing when the event is stale or inactive
     let enrollment = db.get_event_enrollment(community_id, event_id, user.user_id).await?;
-    let can_request_refund = if enrollment.status == EventEnrollmentStatus::Attendee
+    let payments_enabled = payments_cfg.is_some();
+    let can_request_refund = if payments_enabled
+        && enrollment.status == EventEnrollmentStatus::Attendee
         && enrollment
             .purchase_amount_minor
             .is_some_and(|purchase_amount_minor| purchase_amount_minor > 0)
@@ -470,6 +473,17 @@ pub(crate) async fn enrollment_state(
     } else {
         false
     };
+    let (purchase_amount_minor, refund_rejection_reason, refund_request_status, resume_checkout_url) =
+        if payments_enabled {
+            (
+                enrollment.purchase_amount_minor,
+                enrollment.refund_rejection_reason,
+                enrollment.refund_request_status,
+                enrollment.resume_checkout_url,
+            )
+        } else {
+            (None, None, None, None)
+        };
 
     Ok(Json(json!({
         "admission_offer_id": enrollment.admission_offer_id,
@@ -477,10 +491,10 @@ pub(crate) async fn enrollment_state(
         "event_ticket_type_id": enrollment.event_ticket_type_id,
         "is_checked_in": enrollment.is_checked_in,
         "manually_invited": enrollment.manually_invited,
-        "purchase_amount_minor": enrollment.purchase_amount_minor,
-        "refund_rejection_reason": enrollment.refund_rejection_reason,
-        "refund_request_status": enrollment.refund_request_status,
-        "resume_checkout_url": enrollment.resume_checkout_url,
+        "purchase_amount_minor": purchase_amount_minor,
+        "refund_rejection_reason": refund_rejection_reason,
+        "refund_request_status": refund_request_status,
+        "resume_checkout_url": resume_checkout_url,
         "status": enrollment.status
     })))
 }
@@ -758,7 +772,7 @@ pub(crate) struct CfsSubmissionInput {
     #[serde(default)]
     #[garde(length(max = MAX_EVENT_LABELS_PER_SUBMISSION))]
     label_ids: Vec<Uuid>,
-    /// Session proposal being submitted to the event CFS.
+    /// Session proposal being submitted to this event CFS.
     #[garde(skip)]
     session_proposal_id: Uuid,
 }
