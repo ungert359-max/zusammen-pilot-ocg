@@ -135,6 +135,44 @@ jobs:
           grep -Fq 'HandleWebhookError::PaymentsNotConfigured' ocg-server/src/handlers/payments.rs
           grep -Fq 'StatusCode::NOT_FOUND' ocg-server/src/handlers/payments.rs
 
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("ocg-server/src/handlers/event.rs").read_text()
+          start = source.index("pub(crate) async fn enrollment_state(")
+          end = source.index("/// Handler for leaving an event.", start)
+          block = source[start:end]
+
+          required = (
+              "State(payments_cfg): State<Option<PaymentsConfig>>",
+              "let payments_enabled = payments_cfg.is_some();",
+              "let can_request_refund = if payments_enabled",
+              "if payments_enabled {",
+              "(None, None, None, None)",
+              '"purchase_amount_minor": purchase_amount_minor',
+              '"refund_rejection_reason": refund_rejection_reason',
+              '"refund_request_status": refund_request_status',
+              '"resume_checkout_url": resume_checkout_url',
+          )
+          missing = [needle for needle in required if needle not in block]
+          if missing:
+              raise SystemExit(
+                  "Enrollment payment-off masking invariant missing: " + ", ".join(missing)
+              )
+
+          forbidden = (
+              '"purchase_amount_minor": enrollment.purchase_amount_minor',
+              '"refund_rejection_reason": enrollment.refund_rejection_reason',
+              '"refund_request_status": enrollment.refund_request_status',
+              '"resume_checkout_url": enrollment.resume_checkout_url',
+          )
+          leaked = [needle for needle in forbidden if needle in block]
+          if leaked:
+              raise SystemExit(
+                  "Enrollment response bypasses payment-off masking: " + ", ".join(leaked)
+              )
+          PY
+
       - name: Set up Rust for provider-independent payment tests
         uses: dtolnay/rust-toolchain@master
         with:
