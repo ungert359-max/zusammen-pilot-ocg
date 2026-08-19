@@ -30,6 +30,7 @@ is_allowed_path() {
   if (( payment_hardening_allowed )); then
     case "$path" in
       ocg-server/src/handlers/event.rs) return 0 ;;
+      ocg-server/src/handlers/event/tests.rs) return 0 ;;
       ocg-server/src/services/payments/manager.rs) return 0 ;;
       ocg-server/src/services/payments/manager/tests.rs) return 0 ;;
       ocg-server/static/js/event/attendance/status-renderer.js) return 0 ;;
@@ -68,6 +69,7 @@ if (( violations > 0 )); then
   if (( payment_hardening_allowed )); then
     echo "Feature-base payment hardening additionally allows only:" >&2
     echo "  ocg-server/src/handlers/event.rs" >&2
+    echo "  ocg-server/src/handlers/event/tests.rs" >&2
     echo "  ocg-server/src/services/payments/manager.rs" >&2
     echo "  ocg-server/src/services/payments/manager/tests.rs" >&2
     echo "  ocg-server/static/js/event/attendance/status-renderer.js" >&2
