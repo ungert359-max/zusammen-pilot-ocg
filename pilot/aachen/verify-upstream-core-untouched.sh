@@ -13,14 +13,30 @@ done
 
 merge_base="$(git merge-base "$base_ref" "$head_ref")"
 
+payment_hardening_allowed=0
+if [[ "${GITHUB_REF_NAME:-}" == "verified-ocg-feature-base" ||
+      "${GITHUB_HEAD_REF:-}" == "verified-ocg-feature-base" ]]; then
+  payment_hardening_allowed=1
+fi
+
 is_allowed_path() {
   local path="$1"
   case "$path" in
     pilot/aachen/*) return 0 ;;
     .github/workflows/aachen-*.yml) return 0 ;;
     .github/workflows/pilot-validate.yml) return 0 ;;
-    *) return 1 ;;
   esac
+
+  if (( payment_hardening_allowed )); then
+    case "$path" in
+      ocg-server/src/handlers/event.rs) return 0 ;;
+      ocg-server/src/services/payments/manager.rs) return 0 ;;
+      ocg-server/src/services/payments/manager/tests.rs) return 0 ;;
+      ocg-server/static/js/event/attendance/status-renderer.js) return 0 ;;
+    esac
+  fi
+
+  return 1
 }
 
 violations=0
@@ -49,6 +65,13 @@ if (( violations > 0 )); then
   echo "  pilot/aachen/**" >&2
   echo "  .github/workflows/aachen-*.yml" >&2
   echo "  .github/workflows/pilot-validate.yml" >&2
+  if (( payment_hardening_allowed )); then
+    echo "Feature-base payment hardening additionally allows only:" >&2
+    echo "  ocg-server/src/handlers/event.rs" >&2
+    echo "  ocg-server/src/services/payments/manager.rs" >&2
+    echo "  ocg-server/src/services/payments/manager/tests.rs" >&2
+    echo "  ocg-server/static/js/event/attendance/status-renderer.js" >&2
+  fi
   echo "Upstream core changes must arrive through fork synchronization, not local pilot edits." >&2
   exit 1
 fi
