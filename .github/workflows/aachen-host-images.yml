@@ -104,6 +104,12 @@ jobs:
           test "$(git -C "$workdir/repo" rev-parse HEAD)" = "$GITHUB_SHA"
 
           cd "$workdir/repo"
+          server_dockerfile="$workdir/ocg-server.Dockerfile"
+          test "$(grep -Fxc 'RUN cargo build --locked --release' ocg-server/Dockerfile)" -eq 1
+          sed \
+            's|RUN cargo build --locked --release|RUN CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 RUSTFLAGS="-C link-arg=-Wl,--no-keep-memory" cargo build --locked --release|' \
+            ocg-server/Dockerfile > "$server_dockerfile"
+
           sudo -n docker build \
             -f pilot/aachen/postgres-postgis/Dockerfile \
             -t zusammen-pilot-postgres:local \
@@ -114,7 +120,7 @@ jobs:
             .
           sudo -n docker build \
             --build-arg "OCG_COMMIT_SHA=$GITHUB_SHA" \
-            -f ocg-server/Dockerfile \
+            -f "$server_dockerfile" \
             -t zusammen-pilot-server:local \
             .
 

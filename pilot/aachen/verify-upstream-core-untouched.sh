@@ -16,6 +16,8 @@ merge_base="$(git merge-base "$base_ref" "$head_ref")"
 payment_hardening_allowed=0
 if [[ "${GITHUB_REF_NAME:-}" == "verified-ocg-feature-base" ||
       "${GITHUB_HEAD_REF:-}" == "verified-ocg-feature-base" ||
+      "${GITHUB_REF_NAME:-}" == "pilot-aachen-mvp" ||
+      "${GITHUB_HEAD_REF:-}" == "pilot-aachen-mvp" ||
       "${GITHUB_REF_NAME:-}" == sync/ocg-upstream-* ||
       "${GITHUB_HEAD_REF:-}" == sync/ocg-upstream-* ]]; then
   payment_hardening_allowed=1
