@@ -127,15 +127,25 @@ jobs:
           sudo -n docker save -o "$workdir/postgres.tar" zusammen-pilot-postgres:local
           sudo -n docker save -o "$workdir/dbmigrator.tar" zusammen-pilot-dbmigrator:local
           sudo -n docker save -o "$workdir/server.tar" zusammen-pilot-server:local
-          sudo -n k3s ctr images import "$workdir/postgres.tar"
-          sudo -n k3s ctr images import "$workdir/dbmigrator.tar"
-          sudo -n k3s ctr images import "$workdir/server.tar"
+
+          archive_dir="/var/lib/zusammen-pilot/runtime-images/$GITHUB_SHA"
+          sudo -n install -d -o root -g root -m 700 "$archive_dir"
+          for archive in postgres dbmigrator server; do
+            sudo -n install -o root -g root -m 600 \
+              "$workdir/$archive.tar" "$archive_dir/$archive.tar.tmp"
+            sudo -n mv "$archive_dir/$archive.tar.tmp" "$archive_dir/$archive.tar"
+            test "$(sudo -n stat -c '%U:%G:%a' "$archive_dir/$archive.tar")" = root:root:600
+          done
+
+          sudo -n k3s ctr images import "$archive_dir/postgres.tar"
+          sudo -n k3s ctr images import "$archive_dir/dbmigrator.tar"
+          sudo -n k3s ctr images import "$archive_dir/server.tar"
 
           images_list="$(sudo -n k3s ctr images list)"
           grep -Fq 'zusammen-pilot-postgres:local' <<<"$images_list"
           grep -Fq 'zusammen-pilot-dbmigrator:local' <<<"$images_list"
           grep -Fq 'zusammen-pilot-server:local' <<<"$images_list"
-          echo "PASS: exact commit $GITHUB_SHA pilot images are imported into k3s."
+          echo "PASS: exact commit $GITHUB_SHA pilot images are archived and imported into k3s."
 
           sudo -n docker image rm \
             zusammen-pilot-postgres:local \
