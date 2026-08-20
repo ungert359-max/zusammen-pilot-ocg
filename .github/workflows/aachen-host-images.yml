@@ -15,6 +15,7 @@ on:
       - ocg-server/**
       - database/migrations/**
       - pilot/aachen/postgres-postgis/**
+      - pilot/aachen/exact-head-gates.trigger
   workflow_dispatch:
 
 permissions:

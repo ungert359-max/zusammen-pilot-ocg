@@ -11,6 +11,7 @@ on:
       - pilot/aachen/private-product-e2e-run.sh
       - pilot/aachen/private-product-e2e-cluster-run.sh
       - pilot/aachen/private-product-e2e-sidecar-run.sh
+      - pilot/aachen/exact-head-gates.trigger
   workflow_dispatch:
 
 permissions:
@@ -19,7 +20,9 @@ permissions:
   statuses: write
 
 concurrency:
-  group: aachen-private-runtime
+  # Keep product suites serial without blocking the exact-head smoke workflow
+  # that this job must observe successfully before touching its E2E namespace.
+  group: aachen-private-product-e2e
   cancel-in-progress: false
 
 jobs:

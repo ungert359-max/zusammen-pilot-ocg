@@ -10,6 +10,7 @@ on:
       - 'sync/ocg-upstream-*'
     paths:
       - .github/workflows/aachen-remote-probe.yml
+      - pilot/aachen/exact-head-gates.trigger
   workflow_dispatch:
 
 permissions:

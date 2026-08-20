@@ -10,12 +10,14 @@ on:
       - 'sync/ocg-upstream-*'
     paths:
       - pilot/aachen/postgres-postgis/**
+      - pilot/aachen/exact-head-gates.trigger
       - .github/workflows/aachen-postgis-image-validate.yml
   pull_request:
     branches:
       - main
     paths:
       - pilot/aachen/postgres-postgis/**
+      - pilot/aachen/exact-head-gates.trigger
       - .github/workflows/aachen-postgis-image-validate.yml
 
 permissions:

@@ -9,6 +9,7 @@ on:
       - .github/workflows/aachen-private-smoke.yml
       - pilot/aachen/private-smoke-test.sh
       - pilot/aachen/pin-runtime-images.sh
+      - pilot/aachen/exact-head-gates.trigger
   workflow_dispatch:
 
 permissions:
@@ -16,7 +17,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: aachen-private-runtime
+  # Product E2E waits for this exact-head smoke run. A shared workflow-level
+  # group would deadlock by preventing the dependency from starting.
+  group: aachen-private-smoke
   cancel-in-progress: false
 
 jobs:
