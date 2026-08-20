@@ -1,0 +1,88 @@
+name: Aachen host storage repair
+
+on:
+  push:
+    branches:
+      - 'sync/ocg-upstream-*'
+    paths:
+      - .github/workflows/aachen-host-storage-repair.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: aachen-host-maintenance
+  cancel-in-progress: false
+
+jobs:
+  repair-storage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Prepare pinned SSH connection
+        shell: bash
+        env:
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        run: |
+          set -Eeuo pipefail
+          test -n "$HETZNER_SSH_KEY" || { echo 'HETZNER_SSH_KEY secret is unavailable.' >&2; exit 1; }
+          install -d -m 700 "$HOME/.ssh"
+          cat > "$HOME/.ssh/known_hosts" <<'EOF'
+          178.104.6.218 ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABgQChDgb2uAbmyQlTZ4TFdFDQX6zfS0wdSapDMlEqbgJ1Uxm2SkWtlIHzOFaJGuZrWlV7uCjXqlzcMXECWLRXjSGXr16YSxc2M7aN+m9AGHXUAoStwn11aNMDEErYfiNk6uGkmFL7DPzTpd9CPD8opI77ebqsZihk9Ad2Acm4dOjgIHQWg5Wq4BiKY8JCVvRRQnwQ0qTtZyHAfOo3vtyofk8deT7vdv+LpNhIVTZiw+pxGCH/QKYIslP8yOmVyEQg87n2gtao7fOLkoyZJCex374NxeFBFDmlrzn0Kv6Xtl+lR+rfUMGvxJTr0cmnHYoTtLZvPzL2S6ANLKaKie9WkTAhmflI1AUuiiKvMaEzCZAuJpGsbGR8KYWaGvaRxfHNFxWYcHnXyVsGRza7hUMKomIhhWNhVIoJWCtto+eW5JKnNZASo+qy2QgHFxQZi9kHHqr1obE29Sno+8RTAzihROkLzA8aO5K6UcSuM+5OHiA1Rr9VSifzGnpMts8ZBGSW8fM=
+          178.104.6.218 ecdsa-sha2-nistp256 AAAAE2VjZHNhLXNoYTItbmlzdHAyNTYAAAAIbmlzdHAyNTYAAABBBL5b78TTMb3CUYtD9jeG5HzGFdFF+EAYFpn+52F1dbJ/W1rSPyb7u1CD7e3arzj0RogUH8m7w+q0RlqE/231uKI=
+          EOF
+          chmod 600 "$HOME/.ssh/known_hosts"
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$HOME/.ssh/id_ed25519"
+          chmod 600 "$HOME/.ssh/id_ed25519"
+
+      - name: Reclaim only transient build and failed-pod storage
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          ssh \
+            -o BatchMode=yes \
+            -o StrictHostKeyChecking=yes \
+            -o UserKnownHostsFile="$HOME/.ssh/known_hosts" \
+            -o ConnectTimeout=10 \
+            -o ServerAliveInterval=30 \
+            -o ServerAliveCountMax=10 \
+            -i "$HOME/.ssh/id_ed25519" \
+            deploy@178.104.6.218 \
+            'sudo -n env KUBECONFIG=/etc/rancher/k3s/k3s.yaml bash -s' <<'REMOTE'
+          set -Eeuo pipefail
+
+          before_available="$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')"
+          echo 'STORAGE_BEFORE_BEGIN'
+          df -h /
+          docker system df
+          echo 'STORAGE_BEFORE_END'
+
+          # Rust/Docker compilation caches are reproducible and are the only
+          # broad storage target removed here. Docker images, k3s images, PVCs,
+          # namespaces, application data and system logs are preserved.
+          docker builder prune --all --force
+
+          # Delete only API objects for already-failed synthetic pilot pods.
+          # No running pod, PVC, namespace or release is selected.
+          for namespace in ocg-aachen-smoke ocg-aachen-e2e; do
+            kubectl get namespace "$namespace" >/dev/null 2>&1 || continue
+            kubectl delete pod --namespace "$namespace" \
+              --field-selector=status.phase=Failed \
+              --ignore-not-found=true \
+              --wait=false
+          done
+
+          after_available="$(df --output=avail -B1 / | tail -n 1 | tr -d ' ')"
+          echo 'STORAGE_AFTER_BEGIN'
+          df -h /
+          docker system df
+          echo 'STORAGE_AFTER_END'
+
+          test "$after_available" -gt "$before_available"
+          test "$after_available" -ge 10737418240 || {
+            echo 'FAIL: fewer than 10 GiB are available after safe transient cleanup.' >&2
+            exit 1
+          }
+          echo "PASS: transient cleanup reclaimed $((after_available - before_available)) bytes and left at least 10 GiB free."
+          REMOTE
