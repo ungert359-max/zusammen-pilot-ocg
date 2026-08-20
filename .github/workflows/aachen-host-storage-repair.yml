@@ -59,9 +59,14 @@ jobs:
           echo 'STORAGE_BEFORE_END'
 
           # Rust/Docker compilation caches are reproducible and are the only
-          # broad storage target removed here. Docker images, k3s images, PVCs,
-          # namespaces, application data and system logs are preserved.
+          # broad storage target removed here. The host uses Docker's legacy
+          # builder, whose cache is represented by dangling images instead of
+          # BuildKit cache records. The second prune therefore removes only
+          # untagged images that no container references. Tagged Docker images,
+          # all k3s images, PVCs, namespaces, application data and system logs
+          # are preserved.
           docker builder prune --all --force
+          docker image prune --force
 
           # Delete only API objects for already-failed synthetic pilot pods.
           # No running pod, PVC, namespace or release is selected.
