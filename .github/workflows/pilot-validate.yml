@@ -40,7 +40,8 @@ jobs:
           stats_template=ocg-server/templates/site/stats/page.html
           test "$(grep -Fc 'wrapper_class = "min-w-0"' "$stats_template")" -eq 8
           test "$(grep -Fc 'grid grid-cols-1 xl:grid-cols-2 gap-6' "$stats_template")" -eq 4
-          grep -Fq 'statistics fits every supported breakpoint' tests/e2e/site/common/responsive.spec.js
+          grep -Fq 'name: "statistics",' tests/e2e/site/common/responsive.spec.js
+          test "$(grep -Fc 'test(`${responsivePage.name} fits every supported breakpoint`' tests/e2e/site/common/responsive.spec.js)" -eq 2
           grep -Fq 'expect(layoutBounds.scrollWidth).toBeLessThanOrEqual(layoutBounds.clientWidth + 2)' tests/e2e/site/common/responsive.spec.js
 
           payment_pattern='paid events (disable checkout until registration opens|disable checkout after registration closes|allow checkout controls while registration is open)'

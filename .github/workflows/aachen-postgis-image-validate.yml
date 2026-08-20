@@ -67,7 +67,7 @@ jobs:
 
           ready=false
           for _ in $(seq 1 45); do
-            if docker exec "$container" pg_isready -U ocg -d ocg >/dev/null 2>&1; then
+            if [[ "$(docker exec "$container" psql -At -U ocg -d ocg -c 'SELECT 1' 2>/dev/null)" == 1 ]]; then
               ready=true
               break
             fi
