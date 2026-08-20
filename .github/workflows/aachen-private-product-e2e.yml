@@ -19,7 +19,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: aachen-private-product-e2e
+  group: aachen-private-runtime
   cancel-in-progress: false
 
 jobs:
@@ -29,11 +29,7 @@ jobs:
     env:
       HETZNER_HOST: 178.104.6.218
       HETZNER_USER: deploy
-      PILOT_IMAGE_SHA: c2db5863ffe27c987843b4e3b35edea38ef1751e
       PILOT_CONTROL_SHA: ${{ github.sha }}
-      POSTGRES_IMAGE_DIGEST: sha256:8da9f9b4e84f360b75896c483b3c29aef30f80d0e5ca8fb3c8460b570cb964d8
-      SERVER_IMAGE_DIGEST: sha256:91dd101373e4850c6dcdec0a490e4487bd4c97fd77cbf8118666b54f4dd9cfb0
-      MIGRATOR_IMAGE_DIGEST: sha256:3b984728780d09bcc027275695a609034900c50da72697dbe6642105ced671a1
       AACHEN_E2E_NAMESPACE: ocg-aachen-e2e
       AACHEN_E2E_RELEASE: aachen-e2e
 
@@ -68,12 +64,12 @@ jobs:
             local label="$2"
             local response count status conclusion
 
-            for _ in $(seq 1 180); do
+            for _ in $(seq 1 720); do
               response="$(curl --fail --silent --show-error \
                 -H "Authorization: Bearer $GH_TOKEN" \
                 -H 'Accept: application/vnd.github+json' \
                 -H 'X-GitHub-Api-Version: 2022-11-28' \
-                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?head_sha=${GITHUB_SHA}&per_page=1")"
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/${workflow_id}/runs?event=push&head_sha=${GITHUB_SHA}&per_page=1")"
 
               read -r count status conclusion < <(
                 python3 -c 'import json,sys; payload=json.load(sys.stdin); runs=payload.get("workflow_runs", []); print(0, "missing", "none") if not runs else print(1, runs[0].get("status", "unknown"), runs[0].get("conclusion") or "none")' <<<"$response"
@@ -97,6 +93,59 @@ jobs:
 
           wait_for_gate 334455136 'Aachen upstream core integrity'
           wait_for_gate 333909374 'Aachen pilot validation'
+          wait_for_gate 334185699 'Aachen host image preparation'
+
+      - name: Load validated exact-head image evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          response="$(curl --fail --silent --show-error \
+            -H "Authorization: Bearer $GH_TOKEN" \
+            -H 'Accept: application/vnd.github+json' \
+            -H 'X-GitHub-Api-Version: 2022-11-28' \
+            "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/334185699/runs?event=push&head_sha=${GITHUB_SHA}&per_page=1")"
+          host_run_id="$(python3 -c 'import json,sys; runs=json.load(sys.stdin).get("workflow_runs", []); print(runs[0]["id"] if len(runs) == 1 and runs[0].get("conclusion") == "success" else "")' <<<"$response")"
+          [[ "$host_run_id" =~ ^[0-9]+$ ]] || {
+            echo "Missing successful exact-head host image run for $GITHUB_SHA." >&2
+            exit 1
+          }
+
+          evidence_dir="$RUNNER_TEMP/aachen-image-evidence"
+          gh run download "$host_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "aachen-image-evidence-$GITHUB_SHA" \
+            --dir "$evidence_dir"
+          evidence_file="$evidence_dir/aachen-image-evidence.env"
+
+          python3 - "$evidence_file" "$GITHUB_SHA" "$GITHUB_ENV" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          evidence_file = Path(sys.argv[1])
+          expected_sha = sys.argv[2]
+          github_env = Path(sys.argv[3])
+          values = dict(
+              line.split("=", 1)
+              for line in evidence_file.read_text(encoding="utf-8").splitlines()
+          )
+          expected = {
+              "PILOT_IMAGE_SHA",
+              "POSTGRES_IMAGE_DIGEST",
+              "SERVER_IMAGE_DIGEST",
+              "MIGRATOR_IMAGE_DIGEST",
+          }
+          if set(values) != expected or values["PILOT_IMAGE_SHA"] != expected_sha:
+              raise SystemExit("exact-head image evidence is incomplete or mismatched")
+          for key in expected - {"PILOT_IMAGE_SHA"}:
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", values[key]):
+                  raise SystemExit(f"invalid digest in {key}")
+          with github_env.open("a", encoding="utf-8") as target:
+              for key in sorted(expected):
+                  target.write(f"{key}={values[key]}\n")
+          PY
 
       - name: Prepare pinned SSH connection
         shell: bash
@@ -173,12 +222,21 @@ jobs:
           fi
 
           images_list="$(k3s ctr images list)"
-          awk -v name='zusammen-pilot-postgres:local' -v digest="$postgres_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
-          awk -v name='zusammen-pilot-server:local' -v digest="$server_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
-          awk -v name='zusammen-pilot-dbmigrator:local' -v digest="$migrator_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+          require_pinned_image_digest() {
+            local label="$1"
+            local name="$2"
+            local digest="$3"
+            if ! awk -v name="$name" -v digest="$digest" \
+              'index($0,name) && index($0,digest) && index($0,"io.cri-containerd.pinned=pinned") { found=1 } END { exit !found }' <<<"$images_list"; then
+              echo "FAIL: $label image is not pinned to the exact imported digest $digest." >&2
+              awk -v name="$name" 'index($0,name) { print "OBSERVED_IMAGE: " $0 }' <<<"$images_list" >&2
+              exit 1
+            fi
+            echo "PASS: $label image is pinned to exact imported digest $digest."
+          }
+          require_pinned_image_digest postgres 'docker.io/library/zusammen-pilot-postgres:local' "$postgres_digest"
+          require_pinned_image_digest server 'docker.io/library/zusammen-pilot-server:local' "$server_digest"
+          require_pinned_image_digest migrator 'docker.io/library/zusammen-pilot-dbmigrator:local' "$migrator_digest"
 
           test -f "$private_values"
           case "$(stat -c '%a' "$private_values")" in

@@ -12,29 +12,87 @@ on:
   workflow_dispatch:
 
 permissions:
+  actions: read
   contents: read
 
 concurrency:
-  group: aachen-private-runtime-smoke
+  group: aachen-private-runtime
   cancel-in-progress: false
 
 jobs:
   private-smoke:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 210
     env:
       HETZNER_HOST: 178.104.6.218
       HETZNER_USER: deploy
-      # These exact pilot images were built and imported successfully on the
-      # pilot host. Control-only pilot files may advance independently, but
-      # the remote preflight below fails closed if any application/image input
-      # changed since this commit.
-      PILOT_IMAGE_SHA: c2db5863ffe27c987843b4e3b35edea38ef1751e
       PILOT_CONTROL_SHA: ${{ github.sha }}
-      POSTGRES_IMAGE_DIGEST: sha256:8da9f9b4e84f360b75896c483b3c29aef30f80d0e5ca8fb3c8460b570cb964d8
-      SERVER_IMAGE_DIGEST: sha256:91dd101373e4850c6dcdec0a490e4487bd4c97fd77cbf8118666b54f4dd9cfb0
-      MIGRATOR_IMAGE_DIGEST: sha256:3b984728780d09bcc027275695a609034900c50da72697dbe6642105ced671a1
     steps:
+      - name: Wait for and load validated exact-head image evidence
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -Eeuo pipefail
+          host_run_id=''
+          for _ in $(seq 1 720); do
+            response="$(curl --fail --silent --show-error \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H 'Accept: application/vnd.github+json' \
+              -H 'X-GitHub-Api-Version: 2022-11-28' \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/334185699/runs?event=push&head_sha=${GITHUB_SHA}&per_page=1")"
+            read -r host_run_id status conclusion < <(
+              python3 -c 'import json,sys; runs=json.load(sys.stdin).get("workflow_runs", []); print("", "missing", "none") if not runs else print(runs[0]["id"], runs[0].get("status", "unknown"), runs[0].get("conclusion") or "none")' <<<"$response"
+            )
+            if [[ "$status" == completed ]]; then
+              [[ "$conclusion" == success ]] || {
+                echo "Host image preparation concluded '$conclusion' for exact HEAD $GITHUB_SHA." >&2
+                exit 1
+              }
+              break
+            fi
+            sleep 15
+          done
+          [[ "$host_run_id" =~ ^[0-9]+$ && "$status" == completed && "$conclusion" == success ]] || {
+            echo "Timed out waiting for exact-head host image evidence for $GITHUB_SHA." >&2
+            exit 1
+          }
+
+          evidence_dir="$RUNNER_TEMP/aachen-image-evidence"
+          gh run download "$host_run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "aachen-image-evidence-$GITHUB_SHA" \
+            --dir "$evidence_dir"
+          evidence_file="$evidence_dir/aachen-image-evidence.env"
+
+          python3 - "$evidence_file" "$GITHUB_SHA" "$GITHUB_ENV" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          evidence_file = Path(sys.argv[1])
+          expected_sha = sys.argv[2]
+          github_env = Path(sys.argv[3])
+          values = dict(
+              line.split("=", 1)
+              for line in evidence_file.read_text(encoding="utf-8").splitlines()
+          )
+          expected = {
+              "PILOT_IMAGE_SHA",
+              "POSTGRES_IMAGE_DIGEST",
+              "SERVER_IMAGE_DIGEST",
+              "MIGRATOR_IMAGE_DIGEST",
+          }
+          if set(values) != expected or values["PILOT_IMAGE_SHA"] != expected_sha:
+              raise SystemExit("exact-head image evidence is incomplete or mismatched")
+          for key in expected - {"PILOT_IMAGE_SHA"}:
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", values[key]):
+                  raise SystemExit(f"invalid digest in {key}")
+          with github_env.open("a", encoding="utf-8") as target:
+              for key in sorted(expected):
+                  target.write(f"{key}={values[key]}\n")
+          PY
+
       - name: Prepare pinned SSH connection
         shell: bash
         env:
@@ -92,12 +150,7 @@ jobs:
             *) echo "Aachen pilot requires the reviewed Helm 3 executable post-renderer path; found $helm_version" >&2; exit 1 ;;
           esac
 
-          encryption_status="$(k3s secrets-encrypt status)"
-          if ! grep -q 'Encryption Status: Enabled' <<<"$encryption_status"; then
-            echo 'FAIL: k3s secrets encryption is not enabled.' >&2
-            exit 1
-          fi
-          echo 'PASS: k3s secrets encryption is enabled.'
+          k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
 
           if [[ ! -d "$source_dir/.git" ]]; then
             mkdir -p "$(dirname "$source_dir")"
@@ -129,30 +182,21 @@ jobs:
           fi
 
           images_list="$(k3s ctr images list)"
-          require_image_digest() {
+          require_pinned_image_digest() {
             local label="$1"
             local name="$2"
             local digest="$3"
             if ! awk -v name="$name" -v digest="$digest" \
-              'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"; then
-              echo "FAIL: $label image tag is not pinned to the expected imported digest $digest." >&2
-              awk -v name="$name" 'index($0,name) { print "OBSERVED_IMAGE=" $1 " " $3 }' <<<"$images_list" >&2
+              'index($0,name) && index($0,digest) && index($0,"io.cri-containerd.pinned=pinned") { found=1 } END { exit !found }' <<<"$images_list"; then
+              echo "FAIL: $label image is not pinned to the exact imported digest $digest." >&2
+              awk -v name="$name" 'index($0,name) { print "OBSERVED_IMAGE: " $0 }' <<<"$images_list" >&2
               exit 1
             fi
-            k3s ctr images label "$name" \
-              io.cri-containerd.pinned=pinned \
-              io.cattle.k3s.pinned=pinned \
-              >/dev/null
-            if ! k3s ctr images list | awk -v name="$name" -v digest="$digest" \
-              'index($0,name) && index($0,digest) && index($0,"io.cri-containerd.pinned=pinned") { found=1 } END { exit !found }'; then
-              echo "FAIL: $label image passed the digest check but could not be pinned against kubelet image garbage collection." >&2
-              exit 1
-            fi
-            echo "PASS: $label image tag matches expected imported digest $digest."
+            echo "PASS: $label image is pinned to exact imported digest $digest."
           }
-          require_image_digest PostgreSQL 'docker.io/library/zusammen-pilot-postgres:local' "$postgres_digest"
-          require_image_digest server 'docker.io/library/zusammen-pilot-server:local' "$server_digest"
-          require_image_digest migrator 'docker.io/library/zusammen-pilot-dbmigrator:local' "$migrator_digest"
+          require_pinned_image_digest postgres 'docker.io/library/zusammen-pilot-postgres:local' "$postgres_digest"
+          require_pinned_image_digest server 'docker.io/library/zusammen-pilot-server:local' "$server_digest"
+          require_pinned_image_digest migrator 'docker.io/library/zusammen-pilot-dbmigrator:local' "$migrator_digest"
 
           install -d -m 700 "$private_dir"
           if [[ ! -f "$private_values" ]]; then

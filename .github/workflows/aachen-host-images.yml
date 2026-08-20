@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - 'sync/ocg-upstream-*'
     paths:
       - .github/workflows/aachen-host-images.yml
       - .dockerignore
@@ -19,6 +20,10 @@ on:
 permissions:
   actions: read
   contents: read
+
+concurrency:
+  group: aachen-host-image-preparation
+  cancel-in-progress: false
 
 jobs:
   prepare-images:
@@ -74,6 +79,8 @@ jobs:
         shell: bash
         run: |
           set -Eeuo pipefail
+          host_log="$RUNNER_TEMP/aachen-host-images.log"
+          evidence_file="$RUNNER_TEMP/aachen-image-evidence.env"
           ssh \
             -o BatchMode=yes \
             -o StrictHostKeyChecking=yes \
@@ -83,14 +90,21 @@ jobs:
             -o ServerAliveCountMax=10 \
             -i "$HOME/.ssh/id_ed25519" \
             "$HETZNER_USER@$HETZNER_HOST" \
-            "GITHUB_SHA='$GITHUB_SHA' bash -s" <<'REMOTE'
+            "GITHUB_SHA='$GITHUB_SHA' bash -s" 2>&1 <<'REMOTE' | tee "$host_log"
           set -Eeuo pipefail
           test "$(uname -m)" = x86_64
           sudo -n true
           sudo -n k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
           command -v git >/dev/null
           command -v docker >/dev/null
+          command -v flock >/dev/null
           command -v k3s >/dev/null
+
+          exec 9>/tmp/zusammen-pilot-aachen-images.lock
+          flock -w 900 9 || {
+            echo 'Timed out waiting for the exclusive Aachen image-build lock.' >&2
+            exit 1
+          }
 
           workdir="$(mktemp -d /tmp/aachen-images.XXXXXX)"
           cleanup() {
@@ -110,36 +124,120 @@ jobs:
             's|RUN cargo build --locked --release|RUN CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_CODEGEN_UNITS=256 RUSTFLAGS="-C link-arg=-Wl,--no-keep-memory" cargo build --locked --release|' \
             ocg-server/Dockerfile > "$server_dockerfile"
 
+          postgres_sha_image="zusammen-pilot-postgres:$GITHUB_SHA"
+          migrator_sha_image="zusammen-pilot-dbmigrator:$GITHUB_SHA"
+          server_sha_image="zusammen-pilot-server:$GITHUB_SHA"
+
           sudo -n docker build \
             -f pilot/aachen/postgres-postgis/Dockerfile \
+            -t "$postgres_sha_image" \
             -t zusammen-pilot-postgres:local \
             .
           sudo -n docker build \
             -f database/migrations/Dockerfile \
+            -t "$migrator_sha_image" \
             -t zusammen-pilot-dbmigrator:local \
             .
           sudo -n docker build \
             --build-arg "OCG_COMMIT_SHA=$GITHUB_SHA" \
             -f "$server_dockerfile" \
+            -t "$server_sha_image" \
             -t zusammen-pilot-server:local \
             .
 
-          sudo -n docker save -o "$workdir/postgres.tar" zusammen-pilot-postgres:local
-          sudo -n docker save -o "$workdir/dbmigrator.tar" zusammen-pilot-dbmigrator:local
-          sudo -n docker save -o "$workdir/server.tar" zusammen-pilot-server:local
+          sudo -n docker save -o "$workdir/postgres.tar" "$postgres_sha_image" zusammen-pilot-postgres:local
+          sudo -n docker save -o "$workdir/dbmigrator.tar" "$migrator_sha_image" zusammen-pilot-dbmigrator:local
+          sudo -n docker save -o "$workdir/server.tar" "$server_sha_image" zusammen-pilot-server:local
           sudo -n k3s ctr images import "$workdir/postgres.tar"
           sudo -n k3s ctr images import "$workdir/dbmigrator.tar"
           sudo -n k3s ctr images import "$workdir/server.tar"
 
           images_list="$(sudo -n k3s ctr images list)"
-          grep -Fq 'zusammen-pilot-postgres:local' <<<"$images_list"
-          grep -Fq 'zusammen-pilot-dbmigrator:local' <<<"$images_list"
-          grep -Fq 'zusammen-pilot-server:local' <<<"$images_list"
+
+          image_digest() {
+            local image_name="$1"
+            local digest
+            digest="$(awk -v name="$image_name" 'index($1, name) { print $3 }' <<<"$images_list" | sort -u)"
+            [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || {
+              echo "Expected exactly one digest for $image_name; observed '$digest'." >&2
+              exit 1
+            }
+            printf '%s' "$digest"
+          }
+
+          postgres_digest="$(image_digest "$postgres_sha_image")"
+          migrator_digest="$(image_digest "$migrator_sha_image")"
+          server_digest="$(image_digest "$server_sha_image")"
+          [[ "$(image_digest 'zusammen-pilot-postgres:local')" == "$postgres_digest" ]]
+          [[ "$(image_digest 'zusammen-pilot-dbmigrator:local')" == "$migrator_digest" ]]
+          [[ "$(image_digest 'zusammen-pilot-server:local')" == "$server_digest" ]]
+
+          pin_imported_image() {
+            local image_name="$1"
+            local digest="$2"
+            sudo -n k3s ctr images label "$image_name" \
+              io.cri-containerd.pinned=pinned \
+              io.cattle.k3s.pinned=pinned \
+              >/dev/null
+            if ! sudo -n k3s ctr images list | awk -v name="$image_name" -v digest="$digest" \
+              '$1 == name && $3 == digest && index($0,"io.cri-containerd.pinned=pinned") { found=1 } END { exit !found }'; then
+              echo "Imported image $image_name could not be pinned to $digest against k3s garbage collection." >&2
+              exit 1
+            fi
+          }
+
+          pin_imported_image "docker.io/library/$postgres_sha_image" "$postgres_digest"
+          pin_imported_image "docker.io/library/$migrator_sha_image" "$migrator_digest"
+          pin_imported_image "docker.io/library/$server_sha_image" "$server_digest"
+          pin_imported_image 'docker.io/library/zusammen-pilot-postgres:local' "$postgres_digest"
+          pin_imported_image 'docker.io/library/zusammen-pilot-dbmigrator:local' "$migrator_digest"
+          pin_imported_image 'docker.io/library/zusammen-pilot-server:local' "$server_digest"
+
+          printf 'PILOT_IMAGE_SHA=%s\n' "$GITHUB_SHA"
+          printf 'POSTGRES_IMAGE_DIGEST=%s\n' "$postgres_digest"
+          printf 'SERVER_IMAGE_DIGEST=%s\n' "$server_digest"
+          printf 'MIGRATOR_IMAGE_DIGEST=%s\n' "$migrator_digest"
           echo "PASS: exact commit $GITHUB_SHA pilot images are imported into k3s."
 
           sudo -n docker image rm \
+            "$postgres_sha_image" \
+            "$migrator_sha_image" \
+            "$server_sha_image" \
             zusammen-pilot-postgres:local \
             zusammen-pilot-dbmigrator:local \
             zusammen-pilot-server:local \
             >/dev/null 2>&1 || true
           REMOTE
+
+          grep -E '^(PILOT_IMAGE_SHA|POSTGRES_IMAGE_DIGEST|SERVER_IMAGE_DIGEST|MIGRATOR_IMAGE_DIGEST)=' \
+            "$host_log" > "$evidence_file"
+          [[ "$(wc -l < "$evidence_file")" -eq 4 ]]
+          python3 - "$evidence_file" "$GITHUB_SHA" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          values = dict(
+              line.split("=", 1)
+              for line in Path(sys.argv[1]).read_text(encoding="utf-8").splitlines()
+          )
+          expected = {
+              "PILOT_IMAGE_SHA",
+              "POSTGRES_IMAGE_DIGEST",
+              "SERVER_IMAGE_DIGEST",
+              "MIGRATOR_IMAGE_DIGEST",
+          }
+          if set(values) != expected or values["PILOT_IMAGE_SHA"] != sys.argv[2]:
+              raise SystemExit("exact-head image evidence is incomplete or mismatched")
+          for key in expected - {"PILOT_IMAGE_SHA"}:
+              if not re.fullmatch(r"sha256:[0-9a-f]{64}", values[key]):
+                  raise SystemExit(f"invalid digest in {key}")
+          PY
+
+      - name: Publish exact-head image digest evidence
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: aachen-image-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/aachen-image-evidence.env
+          if-no-files-found: error
+          retention-days: 7
