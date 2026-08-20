@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - 'sync/ocg-upstream-*'
     paths:
       - .github/workflows/aachen-private-smoke.yml
       - pilot/aachen/private-smoke-test.sh
@@ -91,7 +92,12 @@ jobs:
             *) echo "Aachen pilot requires the reviewed Helm 3 executable post-renderer path; found $helm_version" >&2; exit 1 ;;
           esac
 
-          k3s secrets-encrypt status | grep -q 'Encryption Status: Enabled'
+          encryption_status="$(k3s secrets-encrypt status)"
+          if ! grep -q 'Encryption Status: Enabled' <<<"$encryption_status"; then
+            echo 'FAIL: k3s secrets encryption is not enabled.' >&2
+            exit 1
+          fi
+          echo 'PASS: k3s secrets encryption is enabled.'
 
           if [[ ! -d "$source_dir/.git" ]]; then
             mkdir -p "$(dirname "$source_dir")"
@@ -123,12 +129,21 @@ jobs:
           fi
 
           images_list="$(k3s ctr images list)"
-          awk -v name='zusammen-pilot-postgres:local' -v digest="$postgres_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
-          awk -v name='zusammen-pilot-server:local' -v digest="$server_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
-          awk -v name='zusammen-pilot-dbmigrator:local' -v digest="$migrator_digest" \
-            'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"
+          require_image_digest() {
+            local label="$1"
+            local name="$2"
+            local digest="$3"
+            if ! awk -v name="$name" -v digest="$digest" \
+              'index($0,name) && index($0,digest) { found=1 } END { exit !found }' <<<"$images_list"; then
+              echo "FAIL: $label image tag is not pinned to the expected imported digest $digest." >&2
+              awk -v name="$name" 'index($0,name) { print "OBSERVED_IMAGE=" $1 " " $3 }' <<<"$images_list" >&2
+              exit 1
+            fi
+            echo "PASS: $label image tag matches expected imported digest $digest."
+          }
+          require_image_digest PostgreSQL 'zusammen-pilot-postgres:local' "$postgres_digest"
+          require_image_digest server 'zusammen-pilot-server:local' "$server_digest"
+          require_image_digest migrator 'zusammen-pilot-dbmigrator:local' "$migrator_digest"
 
           install -d -m 700 "$private_dir"
           if [[ ! -f "$private_values" ]]; then

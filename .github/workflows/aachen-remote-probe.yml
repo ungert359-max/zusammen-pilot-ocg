@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - pilot-aachen-mvp
+      - 'sync/ocg-upstream-*'
     paths:
       - .github/workflows/aachen-remote-probe.yml
   workflow_dispatch:
