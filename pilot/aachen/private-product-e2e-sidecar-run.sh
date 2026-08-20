@@ -254,22 +254,33 @@ kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- bash -lc 'c
 info "PASS: upstream E2E upload fixtures are byte-identical inside the private sidecar."
 
 # The private single-node runtime is healthy on same-pod loopback, but its first
-# server-rendered dashboard navigation can exceed upstream's fixed 5s per-attempt
-# page.goto budget. That helper aborts and retries the navigation every 5s, so a
-# slow first render can never finish even though the server remains healthy.
-# Change only the temporary sidecar copy, fail closed unless exactly one expected
-# constant is present, and keep Playwright's 120s test budget plus every upstream
-# product assertion/spec/fixture unchanged.
+# server-rendered dashboard navigation can exceed upstream's fixed per-attempt
+# page.goto budget. Upstream raised that budget from 5s to 15s; both revisions
+# remain below the private single-node cold-render allowance proven by previous
+# runs. Change only the temporary sidecar copy, accept only one explicitly known
+# upstream value (or the already-applied target), and keep Playwright's 120s test
+# budget plus every upstream product assertion/spec/fixture unchanged.
 kubectl -n "$NAMESPACE" exec "$server_pod" -c "$RUNNER_CONTAINER" -- node -e '
 const fs = require("node:fs");
 const path = "/work/e2e/utils.js";
 const source = fs.readFileSync(path, "utf8");
-const from = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;";
+const known = [
+  "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 5_000;",
+  "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 15_000;",
+];
 const to = "const NAVIGATION_ATTEMPT_TIMEOUT_MS = 30_000;";
-if ((source.split(from).length - 1) !== 1) process.exit(2);
-fs.writeFileSync(path, source.replace(from, to));
+const matches = known.filter((candidate) => (source.split(candidate).length - 1) === 1);
+const targetCount = source.split(to).length - 1;
+if (matches.length === 1 && targetCount === 0) {
+  fs.writeFileSync(path, source.replace(matches[0], to));
+} else if (!(matches.length === 0 && targetCount === 1)) {
+  process.exit(2);
+}
 const updated = fs.readFileSync(path, "utf8");
-if ((updated.split(to).length - 1) !== 1 || updated.includes(from)) process.exit(3);
+if (
+  (updated.split(to).length - 1) !== 1 ||
+  known.some((candidate) => updated.includes(candidate))
+) process.exit(3);
 '
 info "PASS: pilot-only 30s navigation-attempt tolerance applied to temporary sidecar helper copy."
 

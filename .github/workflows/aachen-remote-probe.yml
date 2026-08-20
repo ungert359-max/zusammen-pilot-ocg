@@ -1,5 +1,8 @@
 name: Aachen remote host probe
 
+# Sync candidates touch this read-only probe to bind host and resource evidence
+# to the exact promotion HEAD without exposing the private runtime publicly.
+
 on:
   push:
     branches:

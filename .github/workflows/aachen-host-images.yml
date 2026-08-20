@@ -99,6 +99,10 @@ jobs:
           command -v docker >/dev/null
           command -v flock >/dev/null
           command -v k3s >/dev/null
+          command -v fallocate >/dev/null
+          command -v mkswap >/dev/null
+          command -v swapon >/dev/null
+          command -v swapoff >/dev/null
 
           exec 9>/tmp/zusammen-pilot-aachen-images.lock
           flock -w 900 9 || {
@@ -107,10 +111,25 @@ jobs:
           }
 
           workdir="$(mktemp -d /tmp/aachen-images.XXXXXX)"
+          swapfile="/var/tmp/aachen-build-$GITHUB_SHA.swap"
+          swap_enabled=false
           cleanup() {
+            if [ "$swap_enabled" = true ]; then
+              sudo -n swapoff "$swapfile" >/dev/null 2>&1 || true
+            fi
+            sudo -n rm -f "$swapfile"
             rm -rf "$workdir"
           }
           trap cleanup EXIT
+
+          sudo -n swapoff "$swapfile" >/dev/null 2>&1 || true
+          sudo -n rm -f "$swapfile"
+          test "$(df --output=avail -k /var/tmp | tail -n 1)" -ge 3145728
+          sudo -n fallocate -l 2G "$swapfile"
+          sudo -n chmod 600 "$swapfile"
+          sudo -n mkswap "$swapfile" >/dev/null
+          sudo -n swapon "$swapfile"
+          swap_enabled=true
 
           git clone --quiet --no-checkout https://github.com/ungert359-max/zusammen-pilot-ocg.git "$workdir/repo"
           git -C "$workdir/repo" fetch --quiet --depth 1 origin "$GITHUB_SHA"
@@ -148,12 +167,21 @@ jobs:
           sudo -n docker save -o "$workdir/postgres.tar" "$postgres_sha_image" zusammen-pilot-postgres:local
           sudo -n docker save -o "$workdir/dbmigrator.tar" "$migrator_sha_image" zusammen-pilot-dbmigrator:local
           sudo -n docker save -o "$workdir/server.tar" "$server_sha_image" zusammen-pilot-server:local
-          sudo -n k3s ctr images import "$workdir/postgres.tar"
-          sudo -n k3s ctr images import "$workdir/dbmigrator.tar"
-          sudo -n k3s ctr images import "$workdir/server.tar"
+
+          archive_dir="/var/lib/zusammen-pilot/runtime-images/$GITHUB_SHA"
+          sudo -n install -d -o root -g root -m 700 "$archive_dir"
+          for archive in postgres dbmigrator server; do
+            sudo -n install -o root -g root -m 600 \
+              "$workdir/$archive.tar" "$archive_dir/$archive.tar.tmp"
+            sudo -n mv "$archive_dir/$archive.tar.tmp" "$archive_dir/$archive.tar"
+            test "$(sudo -n stat -c '%U:%G:%a' "$archive_dir/$archive.tar")" = root:root:600
+          done
+
+          sudo -n k3s ctr images import "$archive_dir/postgres.tar"
+          sudo -n k3s ctr images import "$archive_dir/dbmigrator.tar"
+          sudo -n k3s ctr images import "$archive_dir/server.tar"
 
           images_list="$(sudo -n k3s ctr images list)"
-
           image_digest() {
             local image_name="$1"
             local digest
@@ -197,7 +225,7 @@ jobs:
           printf 'POSTGRES_IMAGE_DIGEST=%s\n' "$postgres_digest"
           printf 'SERVER_IMAGE_DIGEST=%s\n' "$server_digest"
           printf 'MIGRATOR_IMAGE_DIGEST=%s\n' "$migrator_digest"
-          echo "PASS: exact commit $GITHUB_SHA pilot images are imported into k3s."
+          echo "PASS: exact commit $GITHUB_SHA pilot images are archived and imported into k3s."
 
           sudo -n docker image rm \
             "$postgres_sha_image" \

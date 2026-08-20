@@ -94,6 +94,9 @@ jobs:
           wait_for_gate 334455136 'Aachen upstream core integrity'
           wait_for_gate 333909374 'Aachen pilot validation'
           wait_for_gate 334185699 'Aachen host image preparation'
+          wait_for_gate 334396322 'Aachen PostGIS image validation'
+          wait_for_gate 334184422 'Aachen remote host probe'
+          wait_for_gate 334355104 'Aachen private runtime smoke'
 
       - name: Load validated exact-head image evidence
         shell: bash
