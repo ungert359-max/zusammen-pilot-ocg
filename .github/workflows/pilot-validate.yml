@@ -30,6 +30,22 @@ jobs:
           bash -n pilot/aachen/pin-runtime-images.sh
           bash -n pilot/aachen/private-product-e2e-prepare.sh
           bash -n pilot/aachen/private-product-e2e-run.sh
+          bash -n pilot/aachen/private-product-e2e-cluster-run.sh
+          bash -n pilot/aachen/private-product-e2e-sidecar-run.sh
+
+      - name: Verify reviewed stats responsive core exception
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          stats_template=ocg-server/templates/site/stats/page.html
+          test "$(grep -Fc 'wrapper_class = "min-w-0"' "$stats_template")" -eq 8
+          test "$(grep -Fc 'grid grid-cols-1 xl:grid-cols-2 gap-6' "$stats_template")" -eq 4
+          grep -Fq 'statistics fits every supported breakpoint' tests/e2e/site/common/responsive.spec.js
+          grep -Fq 'expect(layoutBounds.scrollWidth).toBeLessThanOrEqual(layoutBounds.clientWidth + 2)' tests/e2e/site/common/responsive.spec.js
+
+          payment_pattern='paid events (disable checkout until registration opens|disable checkout after registration closes|allow checkout controls while registration is open)'
+          grep -Fq "payment_provider_test_pattern='$payment_pattern'" pilot/aachen/private-product-e2e-sidecar-run.sh
+          test "$(grep -Ec '^  test\("paid events (disable checkout until registration opens|disable checkout after registration closes|allow checkout controls while registration is open)"' tests/e2e/site/event/registration-window.spec.js)" -eq 3
 
       - name: Verify pilot database runtime base is immutable PostgreSQL 17
         shell: bash

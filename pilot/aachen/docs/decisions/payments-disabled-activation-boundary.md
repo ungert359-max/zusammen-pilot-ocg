@@ -58,9 +58,11 @@ pilot exception in exactly these upstream-core files:
 - `ocg-server/src/services/payments/manager.rs`
 - `ocg-server/src/services/payments/manager/tests.rs`
 - `ocg-server/static/js/event/attendance/status-renderer.js`
+- `ocg-server/templates/site/stats/page.html` (independent responsive-layout exception; see
+  `stats-responsive-core-exception.md`)
 
 Relative to reviewed upstream `main`, the complete binary-safe patch fingerprint is
-`776937fe79ae3d8d38f1b95ab92b6cd22f6b3463789740453966a2782a343fd3`. The integrity gate
+`e27d74cfd7f3724ff38e28a01873e8a14298631e3e1c46230490388d572738b8`. The integrity gate
 verifies this exact fingerprint; matching one of the paths is not sufficient. Any upstream rebase
 or semantic change to the exception must fail closed and receive a new explicit review, updated
 regressions and a new fingerprint. Fork `main` remains byte-for-byte upstream and never carries

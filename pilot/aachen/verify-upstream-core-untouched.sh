@@ -30,8 +30,9 @@ payment_hardening_paths=(
   ocg-server/src/services/payments/manager.rs
   ocg-server/src/services/payments/manager/tests.rs
   ocg-server/static/js/event/attendance/status-renderer.js
+  ocg-server/templates/site/stats/page.html
 )
-expected_payment_hardening_patch_sha256="776937fe79ae3d8d38f1b95ab92b6cd22f6b3463789740453966a2782a343fd3"
+expected_payment_hardening_patch_sha256="e27d74cfd7f3724ff38e28a01873e8a14298631e3e1c46230490388d572738b8"
 
 if (( payment_hardening_allowed )); then
   actual_payment_hardening_patch_sha256="$({
@@ -60,6 +61,7 @@ is_allowed_path() {
       ocg-server/src/services/payments/manager.rs) return 0 ;;
       ocg-server/src/services/payments/manager/tests.rs) return 0 ;;
       ocg-server/static/js/event/attendance/status-renderer.js) return 0 ;;
+      ocg-server/templates/site/stats/page.html) return 0 ;;
     esac
   fi
 
@@ -98,6 +100,7 @@ if (( violations > 0 )); then
     echo "  ocg-server/src/services/payments/manager.rs" >&2
     echo "  ocg-server/src/services/payments/manager/tests.rs" >&2
     echo "  ocg-server/static/js/event/attendance/status-renderer.js" >&2
+    echo "  ocg-server/templates/site/stats/page.html" >&2
     echo "and only with the reviewed patch fingerprint:" >&2
     echo "  $expected_payment_hardening_patch_sha256" >&2
   fi

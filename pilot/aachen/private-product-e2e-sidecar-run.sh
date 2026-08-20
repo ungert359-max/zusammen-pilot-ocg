@@ -581,9 +581,21 @@ if [[ "$RUN_FULL_SUITE" == true ]]; then
   run_pw "--project=chromium-smoke --project=firefox-smoke --project=webkit-smoke"
   info "PASS: complete upstream Smoke suite passed."
 
-  info "Running complete upstream Functional suite against same-pod private runtime..."
-  run_pw "--project=chromium-deep --project=chromium-mobile-deep"
-  info "PASS: complete upstream Functional suite passed with payments/meetings explicitly disabled."
+  # These three unchanged upstream cases require the paid-ticket modal and a
+  # configured payment provider. The Aachen pre-production invariant forbids
+  # both. Keep the tests byte-identical and report them as explicit SKIP/open;
+  # never claim they ran. All other desktop functional cases and the complete
+  # mobile project still execute against the Payment-OFF runtime.
+  payment_provider_test_pattern='paid events (disable checkout until registration opens|disable checkout after registration closes|allow checkout controls while registration is open)'
+  info "SKIP (3/open): paid registration-window provider UI cases require payments enabled; Aachen payments remain OFF."
+
+  info "Running complete provider-independent upstream desktop Functional suite against same-pod private runtime..."
+  run_pw "--project=chromium-deep --grep-invert '$payment_provider_test_pattern'"
+  info "PASS: provider-independent upstream desktop Functional suite passed."
+
+  info "Running complete upstream mobile Functional suite against same-pod private runtime..."
+  run_pw "--project=chromium-mobile-deep"
+  info "PASS: complete upstream mobile Functional suite passed."
 fi
 
 info "PASS: private same-pod OCG product verification completed."
