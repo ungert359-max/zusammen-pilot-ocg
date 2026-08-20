@@ -57,14 +57,22 @@ jobs:
              if sudo -n true >/dev/null 2>&1; then
                echo "SUDO_NONINTERACTIVE=yes"
                sudo -n k3s secrets-encrypt status || true
+               echo "RESOURCE_STATE_BEGIN"
+               df -h /
+               free -m
+               $K top node 2>/dev/null || true
+               $K top pods -A --sort-by=memory 2>/dev/null | tail -n 20 || true
+               sudo -n journalctl -u k3s --since "-30 minutes" --no-pager 2>/dev/null | grep -Ei "image.*(garbage|delete|remove)|disk.?pressure|evict" | tail -n 80 || true
+               echo "RESOURCE_STATE_END"
+               image_checks_failed=0
                echo "POSTGRES_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list | grep -F "zusammen-pilot-postgres:local"
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-postgres:local" || image_checks_failed=1
                echo "POSTGRES_IMAGE_CHECK_END"
                echo "SERVER_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list | grep -F "zusammen-pilot-server:local"
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-server:local" || image_checks_failed=1
                echo "SERVER_IMAGE_CHECK_END"
                echo "MIGRATOR_IMAGE_CHECK_BEGIN"
-               sudo -n k3s ctr images list | grep -F "zusammen-pilot-dbmigrator:local"
+               sudo -n k3s ctr images list | grep -F "zusammen-pilot-dbmigrator:local" || image_checks_failed=1
                echo "MIGRATOR_IMAGE_CHECK_END"
                echo "DEPENDENCY_IMAGE_DIGESTS_BEGIN"
                sudo -n k3s ctr images list | grep -E "artifacthub/postgres|bitnamilegacy/kubectl" || true
@@ -89,6 +97,7 @@ jobs:
                  $K -n ocg-aachen-smoke logs "$server_pod" -c check-dbmigrator-run --tail=80 2>&1 || true
                fi
                echo "MIGRATION_DIAGNOSTICS_END"
+               test "$image_checks_failed" -eq 0
              else
                echo "SUDO_NONINTERACTIVE=no"
              fi'

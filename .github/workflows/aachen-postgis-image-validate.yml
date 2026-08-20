@@ -1,5 +1,8 @@
 name: Aachen PostGIS image validation
 
+# This workflow is intentionally touched by isolated sync candidates so the
+# image and migration evidence always belongs to the exact candidate HEAD.
+
 on:
   push:
     branches:
